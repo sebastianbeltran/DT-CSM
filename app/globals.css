@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: #f1f5f9;
+  }
+}
+
+/* Grade table */
+.grade-table-wrapper {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: calc(100vh - 220px);
+}
+
+.grade-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: max-content;
+}
+
+.grade-table th,
+.grade-table td {
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.grade-table .col-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 10;
+  background: white;
+}
+
+.grade-table thead .col-sticky {
+  z-index: 20;
+}
+
+.grade-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f8fafc;
+}
+
+.grade-table thead .col-sticky {
+  z-index: 25;
+  background: #f8fafc;
+}
+
+.grade-input {
+  width: 4.5rem;
+  text-align: center;
+  border: none;
+  background: transparent;
+  font-size: 0.875rem;
+  outline: none;
+  padding: 0.25rem;
+}
+
+.grade-input:focus {
+  background: #eff6ff;
+  border-radius: 4px;
+}
+
+.grade-input:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+/* Print styles */
+@media print {
+  .no-print { display: none !important; }
+  body { print-color-adjust: exact; }
+}
