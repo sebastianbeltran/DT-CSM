@@ -11,6 +11,7 @@ export interface Course {
   name: string
   grade_weights: { formativa: number; sumativa: number }
   bonus_cap: number
+  class_days?: number[] | null
   created_at: string
 }
 

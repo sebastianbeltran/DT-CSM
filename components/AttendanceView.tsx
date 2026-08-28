@@ -31,6 +31,7 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
   const [genEnd, setGenEnd] = useState(`${new Date().getFullYear()}-11-30`)
   const [genFile, setGenFile] = useState<File | null>(null)
   const [generating, setGenerating] = useState(false)
+  const [storedDays, setStoredDays] = useState<number[] | null>(course.class_days ?? null)
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId)
 
@@ -83,11 +84,11 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
   }
 
   async function generateSessions() {
-    if (!genFile) { alert('Selecciona el archivo de horario primero'); return }
+    if (!storedDays && !genFile) { alert('Selecciona el archivo de horario primero'); return }
     setGenerating(true)
     try {
       const fd = new FormData()
-      fd.append('file', genFile)
+      if (genFile) fd.append('file', genFile)
       fd.append('courseId', course.id)
       fd.append('courseName', course.name)
       fd.append('startDate', genStart)
@@ -97,6 +98,8 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
       if (res.ok) {
         const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
         alert(`✓ Sesiones generadas:\n• ${data.normal} clases normales\n• ${data.holidays} festivos marcados automáticamente\n\nDías de clase: ${data.days.map((d: number) => dayNames[d]).join(', ')}`)
+        setStoredDays(data.days)
+        setGenFile(null)
         setShowGenerate(false)
         const sessionsRes = await fetch(`/api/attendance/sessions?courseId=${course.id}`).then(r => r.json())
         setSessions(sessionsRes)
@@ -119,8 +122,9 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
     if (selectedSessionId === sessionId) setSelectedSessionId(null)
   }
 
-  // Attendance stats
-  const normalSessions = sessions.filter((s) => s.status === 'normal')
+  // Attendance stats — only count sessions that have already occurred
+  const today = new Date().toISOString().split('T')[0]
+  const normalSessions = sessions.filter((s) => s.status === 'normal' && s.session_date <= today)
   const studentStats = students.map((student) => {
     const absences = normalSessions.filter((s) => s.attendance_records.some((r) => r.student_id === student.id)).length
     const pct = normalSessions.length > 0 ? ((normalSessions.length - absences) / normalSessions.length) * 100 : 100
@@ -160,9 +164,24 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
           {showGenerate && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-3 space-y-3">
               <p className="text-sm text-blue-800 font-medium">
-                Genera todas las clases del año automáticamente a partir del horario, marcando los festivos colombianos.
+                Genera todas las clases del año automáticamente, marcando los festivos colombianos.
               </p>
-              <div className="space-y-3">
+
+              {storedDays && storedDays.length > 0 ? (
+                <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  <span className="text-green-700 text-sm">
+                    ✓ Horario guardado — clases los{' '}
+                    <strong>{storedDays.map((d) => ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'][d]).join(', ')}</strong>
+                  </span>
+                  <button
+                    onClick={() => setStoredDays(null)}
+                    className="ml-auto text-xs text-gray-400 hover:text-red-500"
+                    title="Cambiar horario"
+                  >
+                    Cambiar
+                  </button>
+                </div>
+              ) : (
                 <div>
                   <label className="text-xs text-gray-600 block mb-1">Archivo de horario (.xlsx) *</label>
                   <input
@@ -173,35 +192,37 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
                   />
                   {genFile && <p className="text-xs text-green-600 mt-1">✓ {genFile.name}</p>}
                 </div>
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div>
-                    <label className="text-xs text-gray-600 block mb-1">Inicio del año escolar</label>
-                    <input
-                      type="date"
-                      value={genStart}
-                      onChange={(e) => setGenStart(e.target.value)}
-                      className="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-600 block mb-1">Fin del año escolar</label>
-                    <input
-                      type="date"
-                      value={genEnd}
-                      onChange={(e) => setGenEnd(e.target.value)}
-                      className="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <button
-                    onClick={generateSessions}
-                    disabled={generating || !genFile}
-                    className="self-end bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    {generating ? 'Generando...' : 'Generar'}
-                  </button>
-                  <button onClick={() => setShowGenerate(false)} className="self-end text-sm text-gray-400">Cancelar</button>
+              )}
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <div>
+                  <label className="text-xs text-gray-600 block mb-1">Inicio del año escolar</label>
+                  <input
+                    type="date"
+                    value={genStart}
+                    onChange={(e) => setGenStart(e.target.value)}
+                    className="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
+                <div>
+                  <label className="text-xs text-gray-600 block mb-1">Fin del año escolar</label>
+                  <input
+                    type="date"
+                    value={genEnd}
+                    onChange={(e) => setGenEnd(e.target.value)}
+                    className="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <button
+                  onClick={generateSessions}
+                  disabled={generating || (!storedDays && !genFile)}
+                  className="self-end bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {generating ? 'Generando...' : 'Generar'}
+                </button>
+                <button onClick={() => setShowGenerate(false)} className="self-end text-sm text-gray-400">Cancelar</button>
               </div>
+
               <p className="text-xs text-gray-500">
                 Si ya existen sesiones para esas fechas, no se duplican. Puedes regenerar sin problema.
               </p>

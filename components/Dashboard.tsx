@@ -33,6 +33,11 @@ export default function Dashboard({
   const [reimportCourseId, setReimportCourseId] = useState<string | null>(null)
   const reimportFileRef = useRef<HTMLInputElement>(null)
 
+  // Schedule upload
+  const [showSchedule, setShowSchedule] = useState(false)
+  const [scheduleFile, setScheduleFile] = useState<File | null>(null)
+  const [uploadingSchedule, setUploadingSchedule] = useState(false)
+
   const filteredCourses = courses.filter((c) => c.school_year_id === selectedYearId)
 
   async function createYear() {
@@ -132,6 +137,28 @@ export default function Dashboard({
     }
   }
 
+  async function handleScheduleUpload() {
+    if (!scheduleFile) { alert('Selecciona el archivo de horario'); return }
+    if (!selectedYearId) { alert('Selecciona un año escolar primero'); return }
+    setUploadingSchedule(true)
+    const fd = new FormData()
+    fd.append('file', scheduleFile)
+    fd.append('yearId', selectedYearId)
+    const res = await fetch('/api/attendance/upload-schedule', { method: 'POST', body: fd })
+    const data = await res.json()
+    setUploadingSchedule(false)
+    if (res.ok) {
+      const lines = [`✓ Horario configurado para ${data.updated.length} curso(s):`]
+      if (data.updated.length) lines.push(data.updated.map((n: string) => `  • ${n}`).join('\n'))
+      if (data.notFound.length) lines.push(`\nNo encontrados en el archivo:\n${data.notFound.map((n: string) => `  • ${n}`).join('\n')}`)
+      alert(lines.join('\n'))
+      setShowSchedule(false)
+      setScheduleFile(null)
+    } else {
+      alert('Error: ' + data.error)
+    }
+  }
+
   // Re-import into existing course
   async function handleReimport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -218,12 +245,20 @@ export default function Dashboard({
             <h2 className="text-lg font-bold text-gray-800">
               Cursos – {years.find((y) => y.id === selectedYearId)?.name}
             </h2>
-            <button
-              onClick={() => setShowImport(true)}
-              className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors text-sm font-medium"
-            >
-              ↑ Importar lista de estudiantes (Excel)
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowSchedule(true)}
+                className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-xl hover:border-blue-400 hover:text-blue-600 transition-colors text-sm font-medium"
+              >
+                📅 Subir horario
+              </button>
+              <button
+                onClick={() => setShowImport(true)}
+                className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors text-sm font-medium"
+              >
+                ↑ Importar lista de estudiantes (Excel)
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
@@ -273,6 +308,60 @@ export default function Dashboard({
         <div className="text-center py-20 text-gray-400">
           <div className="text-5xl mb-4">📐</div>
           <p>Crea un año escolar para comenzar</p>
+        </div>
+      )}
+
+      {/* Schedule upload modal */}
+      {showSchedule && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-lg font-bold text-gray-900">Subir horario de clases</h2>
+              <button onClick={() => { setShowSchedule(false); setScheduleFile(null) }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+            </div>
+
+            <p className="text-sm text-gray-600 mb-4">
+              Sube tu archivo de horario una sola vez. La app detectará automáticamente los días de clase de cada curso de <strong>{years.find((y) => y.id === selectedYearId)?.name}</strong>.
+            </p>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Archivo de horario (.xlsx) *</label>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(e) => setScheduleFile(e.target.files?.[0] ?? null)}
+                className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:cursor-pointer hover:file:bg-blue-100"
+              />
+              {scheduleFile && <p className="text-xs text-green-600 mt-1">✓ {scheduleFile.name}</p>}
+              <p className="text-xs text-gray-400 mt-2">
+                El nombre de cada curso en la app debe coincidir con el del archivo (ej: "10A", "11").
+              </p>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => { setShowSchedule(false); setScheduleFile(null) }}
+                className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleScheduleUpload}
+                disabled={uploadingSchedule || !scheduleFile}
+                className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {uploadingSchedule ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Procesando...
+                  </>
+                ) : 'Configurar horario'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

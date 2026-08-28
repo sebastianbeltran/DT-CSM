@@ -52,6 +52,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [newStudentName, setNewStudentName] = useState('')
   const [groups, setGroups] = useState<Group[]>(initialGroups)
   const [groupGradeCol, setGroupGradeCol] = useState<GradeColumn | null>(null)
+  const headerRow1Ref = useRef<HTMLTableRowElement>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortByGrade, setSortByGrade] = useState<'asc' | 'desc' | null>(null)
   const [showArchived, setShowArchived] = useState(false)
@@ -63,6 +64,12 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [loadingArchived, setLoadingArchived] = useState(false)
 
   useEffect(() => { setLocalStudents(students) }, [students])
+
+  useEffect(() => {
+    if (!headerRow1Ref.current) return
+    const h = headerRow1Ref.current.getBoundingClientRect().height
+    document.documentElement.style.setProperty('--grade-header-row1-height', `${h}px`)
+  }, [periodCompetencies])
 
   async function loadArchived() {
     setLoadingArchived(true)
@@ -370,7 +377,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
         <table className="grade-table">
           <thead>
             {/* Competency header row */}
-            <tr>
+            <tr ref={headerRow1Ref}>
               <th className="col-sticky px-3 py-2 text-left text-xs font-semibold text-gray-600 bg-gray-50 border-r-2 border-gray-200 min-w-48">
                 Estudiante
               </th>
@@ -411,7 +418,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                       />
                     </div>
                     {pc.learning_objective && (
-                      <p className="text-xs font-normal opacity-60 mt-0.5 max-w-xs mx-auto truncate" title={pc.learning_objective}>
+                      <p className="text-xs font-normal opacity-60 mt-0.5 max-w-xs mx-auto">
                         {pc.learning_objective}
                       </p>
                     )}
@@ -447,7 +454,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
             </tr>
 
             {/* Column name row */}
-            <tr>
+            <tr className="subheader">
               <th className="col-sticky px-3 py-1.5 text-left text-xs text-gray-500 bg-gray-100 border-r-2 border-gray-200"></th>
 
               {periodCompetencies.map((pc) => {
@@ -953,7 +960,7 @@ function ColumnHeader({
     <th className={`px-1 py-1.5 text-center border-r border-gray-200 group ${typeColor}`}>
       <div className="flex flex-col items-center gap-0.5">
         <div className="flex items-center gap-1">
-          {col.type === 'sumativa' ? (
+          {(col.type === 'sumativa' || criteria.length > 0) ? (
             <button
               onClick={onQuickGrade}
               className="text-xs font-medium hover:underline max-w-24 truncate text-left"
@@ -1020,7 +1027,7 @@ function GradeCell({
   const hasCriteria = criteria.length > 0
   const disabled = (col.type === 'sumativa' || (col.type === 'formativa' && hasCriteria)) || !col.description
 
-  if (col.type === 'sumativa' || (col.type === 'formativa' && hasCriteria)) {
+  if (col.type === 'sumativa' || hasCriteria) {
     return (
       <td
         className="px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50"

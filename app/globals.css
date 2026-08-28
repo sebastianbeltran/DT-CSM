@@ -52,16 +52,28 @@
   z-index: 20;
 }
 
-.grade-table thead th {
+.grade-table thead tr:first-child th {
   position: sticky;
   top: 0;
   z-index: 5;
   background: #f8fafc;
 }
 
-.grade-table thead .col-sticky {
+.grade-table thead tr.subheader th {
+  position: sticky;
+  top: var(--grade-header-row1-height, 3.25rem);
+  z-index: 5;
+  background: #f1f5f9;
+}
+
+.grade-table thead tr:first-child .col-sticky {
   z-index: 25;
   background: #f8fafc;
+}
+
+.grade-table thead tr.subheader .col-sticky {
+  z-index: 25;
+  background: #f1f5f9;
 }
 
 .grade-input {

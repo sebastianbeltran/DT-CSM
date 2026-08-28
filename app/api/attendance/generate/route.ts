@@ -58,19 +58,33 @@ export async function POST(req: Request) {
     const startDate = formData.get('startDate') as string
     const endDate = formData.get('endDate') as string
 
-    if (!file || !courseId || !startDate || !endDate) {
-      return NextResponse.json({ error: 'Faltan parámetros o archivo de horario' }, { status: 400 })
+    if (!courseId || !startDate || !endDate) {
+      return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 })
     }
 
-    const buffer = await file.arrayBuffer()
-    const classDays = parseCourseScheduleFromBuffer(buffer, courseName)
+    let classDays: number[]
 
-    console.log(`[generate] course="${courseName}" → días detectados: ${JSON.stringify(classDays)}`)
+    if (file) {
+      const buffer = await file.arrayBuffer()
+      classDays = parseCourseScheduleFromBuffer(buffer, courseName)
 
-    if (classDays.length === 0) {
-      return NextResponse.json({
-        error: `No se encontró "${courseName}" en el horario. Asegúrate de que el nombre del curso en la app coincida exactamente con el del archivo Excel (ej: "10A", "11").`,
-      }, { status: 404 })
+      console.log(`[generate] course="${courseName}" → días detectados: ${JSON.stringify(classDays)}`)
+
+      if (classDays.length === 0) {
+        return NextResponse.json({
+          error: `No se encontró "${courseName}" en el horario. Asegúrate de que el nombre del curso en la app coincida exactamente con el del archivo Excel (ej: "10A", "11").`,
+        }, { status: 404 })
+      }
+
+      // Persist class_days so future generates don't need the file
+      await supabase.from('courses').update({ class_days: classDays }).eq('id', courseId)
+    } else {
+      const { data: course } = await supabase.from('courses').select('class_days').eq('id', courseId).single()
+      if (!course?.class_days || course.class_days.length === 0) {
+        return NextResponse.json({ error: 'No hay horario guardado para este curso. Sube el archivo de horario la primera vez.' }, { status: 400 })
+      }
+      classDays = course.class_days
+      console.log(`[generate] course="${courseName}" → usando días guardados: ${JSON.stringify(classDays)}`)
     }
 
     const start = new Date(startDate + 'T12:00:00')
@@ -101,11 +115,39 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No se generaron sesiones. Verifica el rango de fechas.' }, { status: 400 })
     }
 
-    const { error } = await supabase
-      .from('schedule_sessions')
-      .upsert(sessions, { onConflict: 'course_id,session_date', ignoreDuplicates: true })
+    const today = new Date().toISOString().split('T')[0]
+    const pastSessions = sessions.filter((s) => s.session_date < today)
+    const futureSessions = sessions.filter((s) => s.session_date >= today)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+    // Past sessions: only add missing ones, never touch existing
+    if (pastSessions.length > 0) {
+      const { error } = await supabase
+        .from('schedule_sessions')
+        .upsert(pastSessions, { onConflict: 'course_id,session_date', ignoreDuplicates: true })
+      if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+    }
+
+    // Future sessions: remove empty ones (no attendance), then insert new schedule
+    if (futureSessions.length > 0) {
+      const { data: existingFuture } = await supabase
+        .from('schedule_sessions')
+        .select('id, attendance_records(id)')
+        .eq('course_id', courseId)
+        .gte('session_date', today)
+
+      const emptyIds = (existingFuture ?? [])
+        .filter((s: any) => s.attendance_records.length === 0)
+        .map((s: any) => s.id)
+
+      if (emptyIds.length > 0) {
+        await supabase.from('schedule_sessions').delete().in('id', emptyIds)
+      }
+
+      const { error } = await supabase
+        .from('schedule_sessions')
+        .upsert(futureSessions, { onConflict: 'course_id,session_date', ignoreDuplicates: true })
+      if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+    }
 
     return NextResponse.json({
       ok: true,
