@@ -9,7 +9,14 @@ function getClient(): SupabaseClient {
     if (!url || !key) {
       throw new Error('Missing Supabase environment variables. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.')
     }
-    _client = createClient(url, key, { auth: { persistSession: false } })
+    _client = createClient(url, key, {
+      auth: { persistSession: false },
+      global: {
+        // Bypass Next.js 14's fetch caching — its patched fetch returns
+        // immutable Response headers that cause Supabase to throw internally.
+        fetch: (input, init) => fetch(input, { ...init, cache: 'no-store' }),
+      },
+    })
   }
   return _client
 }
