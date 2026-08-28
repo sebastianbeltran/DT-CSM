@@ -119,6 +119,21 @@ export async function POST(req: Request) {
     const pastSessions = sessions.filter((s) => s.session_date < today)
     const futureSessions = sessions.filter((s) => s.session_date >= today)
 
+    // Delete empty sessions before the new start date (they were never used, clean slate)
+    const { data: beforeStart } = await supabase
+      .from('schedule_sessions')
+      .select('id, attendance_records(id)')
+      .eq('course_id', courseId)
+      .lt('session_date', startDate)
+
+    const emptyBeforeStart = (beforeStart ?? [])
+      .filter((s: any) => s.attendance_records.length === 0)
+      .map((s: any) => s.id)
+
+    if (emptyBeforeStart.length > 0) {
+      await supabase.from('schedule_sessions').delete().in('id', emptyBeforeStart)
+    }
+
     // Past sessions: only add missing ones, never touch existing
     if (pastSessions.length > 0) {
       const { error } = await supabase
