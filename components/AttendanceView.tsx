@@ -27,7 +27,7 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
   const [newDate, setNewDate] = useState('')
   const [addingSession, setAddingSession] = useState(false)
   const [showGenerate, setShowGenerate] = useState(false)
-  const [genStart, setGenStart] = useState(`${new Date().getFullYear()}-01-20`)
+  const [genStart, setGenStart] = useState(new Date().toISOString().split('T')[0])
   const [genEnd, setGenEnd] = useState(`${new Date().getFullYear()}-11-30`)
   const [genFile, setGenFile] = useState<File | null>(null)
   const [generating, setGenerating] = useState(false)
@@ -196,7 +196,7 @@ export default function AttendanceView({ course, students, initialSessions }: Pr
 
               <div className="flex items-center gap-3 flex-wrap">
                 <div>
-                  <label className="text-xs text-gray-600 block mb-1">Inicio del año escolar</label>
+                  <label className="text-xs text-gray-600 block mb-1">Generar desde</label>
                   <input
                     type="date"
                     value={genStart}
