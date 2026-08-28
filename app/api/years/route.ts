@@ -1,31 +1,5 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import https from 'node:https'
-
-// Next.js 14 patches the global fetch and its internal headers processing
-// breaks on POST requests (headers.append error). Use Node's native https
-// module instead, which is completely unpatched.
-function httpsPost(url: string, body: string, headers: Record<string, string>): Promise<{ status: number; text: string }> {
-  return new Promise((resolve, reject) => {
-    const { hostname, pathname, search } = new URL(url)
-    const req = https.request(
-      {
-        hostname,
-        path: pathname + (search ?? ''),
-        method: 'POST',
-        headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
-      },
-      (res) => {
-        let text = ''
-        res.on('data', (chunk: Buffer) => { text += chunk.toString() })
-        res.on('end', () => resolve({ status: res.statusCode ?? 500, text }))
-      }
-    )
-    req.on('error', reject)
-    req.write(body)
-    req.end()
-  })
-}
 
 export async function POST(req: Request) {
   try {
@@ -34,22 +8,23 @@ export async function POST(req: Request) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!.trim()
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!.trim()
 
-    const body = JSON.stringify({ name })
-    const { status, text } = await httpsPost(
-      `${supabaseUrl}/rest/v1/school_years`,
-      body,
-      {
+    const res = await fetch(`${supabaseUrl}/rest/v1/school_years`, {
+      method: 'POST',
+      headers: {
         'Content-Type': 'application/json',
         'apikey': serviceKey,
         'Authorization': `Bearer ${serviceKey}`,
         'Prefer': 'return=representation',
-      }
-    )
+      },
+      body: JSON.stringify({ name }),
+    })
 
-    if (status >= 400) {
+    const text = await res.text()
+
+    if (!res.ok) {
       let msg = text
       try { msg = JSON.parse(text)?.message ?? text } catch {}
-      return NextResponse.json({ error: msg }, { status })
+      return NextResponse.json({ error: msg }, { status: res.status })
     }
 
     const rows = JSON.parse(text)
@@ -62,6 +37,12 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  const { data } = await supabase.from('school_years').select('*').order('name', { ascending: false })
-  return NextResponse.json(data ?? [])
+  try {
+    const { data, error } = await supabase.from('school_years').select('*').order('name', { ascending: false })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data ?? [])
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
 }
