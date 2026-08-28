@@ -31,8 +31,8 @@ export async function POST(req: Request) {
   try {
     const { name } = await req.json()
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!.trim()
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!.trim()
 
     const body = JSON.stringify({ name })
     const { status, text } = await httpsPost(
