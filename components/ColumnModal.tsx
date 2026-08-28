@@ -1,15 +1,16 @@
 'use client'
 
 import { useState } from 'react'
-import type { GradeColumn, Criterion, Phase, Course } from '@/lib/types'
+import type { GradeColumn, Criterion, Course } from '@/lib/types'
+import type { CompetencyKey } from '@/lib/competencies'
+import { COMPETENCIES } from '@/lib/competencies'
 
 interface Props {
-  phase?: Phase
+  competencyKey?: CompetencyKey
   column?: GradeColumn
   defaultType?: string
   periodId: string
   course: Course
-  phaseName?: string
   onSave: (column: GradeColumn, criteria?: Criterion[]) => void
   onClose: () => void
 }
@@ -20,7 +21,7 @@ interface CriterionDraft {
   max_score: number
 }
 
-export default function ColumnModal({ phase, column, defaultType, periodId, course, phaseName, onSave, onClose }: Props) {
+export default function ColumnModal({ competencyKey, column, defaultType, periodId, course, onSave, onClose }: Props) {
   const isEdit = !!column
   const [name, setName] = useState(column?.name ?? '')
   const [type, setType] = useState<'formativa' | 'sumativa' | 'bonus'>(
@@ -33,18 +34,22 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
   const [aiDescLoading, setAiDescLoading] = useState(false)
   const [aiHint, setAiHint] = useState('')
   const [saving, setSaving] = useState(false)
-  const [step, setStep] = useState<'info' | 'criteria'>(column?.type === 'sumativa' ? 'info' : 'info')
   const [bonusWithCriteria, setBonusWithCriteria] = useState(false)
+  const [formativaWithCriteria, setFormativaWithCriteria] = useState(false)
 
-  // Load existing criteria when editing a sumativa or bonus-with-criteria
+  const effectiveCompetencyKey = competencyKey ?? (column?.competency_key as CompetencyKey | undefined)
+  const competency = effectiveCompetencyKey ? COMPETENCIES[effectiveCompetencyKey] : null
+
   useState(() => {
-    if ((column?.type === 'sumativa' || column?.type === 'bonus') && column.id) {
+    if (column?.id && column.type !== 'formativa' || (column?.type === 'formativa' && column.id)) {
+      if (!column?.id) return
       setLoadingCriteria(true)
       fetch(`/api/criteria?columnId=${column.id}`)
         .then((r) => r.json())
         .then((data) => {
           setCriteria(data.map((c: Criterion) => ({ id: c.id, name: c.name, max_score: c.max_score })))
           if (column.type === 'bonus' && data.length > 0) setBonusWithCriteria(true)
+          if (column.type === 'formativa' && data.length > 0) setFormativaWithCriteria(true)
           setLoadingCriteria(false)
         })
     }
@@ -59,7 +64,7 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           activity: name,
-          phase: phaseName ?? phase?.name ?? '',
+          phase: competency?.name ?? '',
           course: course.name,
           type,
           notes: aiHint,
@@ -69,7 +74,7 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
       if (data.description) setDescription(data.description)
       else if (data.error) alert('Error IA: ' + data.error)
     } catch {
-      alert('No se pudo conectar con la IA. Verifica que ANTHROPIC_API_KEY esté configurada en .env.local')
+      alert('No se pudo conectar con la IA. Verifica que ANTHROPIC_API_KEY esté configurada.')
     }
     setAiDescLoading(false)
   }
@@ -84,7 +89,7 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
         body: JSON.stringify({
           description,
           activity: name,
-          phase: phaseName ?? phase?.name ?? '',
+          phase: competency?.name ?? '',
           course: course.name,
         }),
       })
@@ -92,7 +97,7 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
       if (data.criteria) setCriteria(data.criteria)
       else if (data.error) alert('Error IA: ' + data.error)
     } catch {
-      alert('No se pudo conectar con la IA. Verifica que ANTHROPIC_API_KEY esté configurada en .env.local')
+      alert('No se pudo conectar con la IA. Verifica que ANTHROPIC_API_KEY esté configurada.')
     }
     setAiLoading(false)
   }
@@ -118,53 +123,82 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
 
     setSaving(true)
 
-    let savedColumn: GradeColumn
+    try {
+      let savedColumn: GradeColumn
 
-    if (isEdit && column) {
-      const res = await fetch(`/api/columns/${column.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description }),
-      })
-      savedColumn = await res.json()
-    } else {
-      const res = await fetch('/api/columns', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phase_id: type !== 'bonus' ? (phase?.id ?? (column as GradeColumn | undefined)?.phase_id) : null,
-          period_id: periodId,
-          name,
-          description,
-          type,
-          sort_order: 99,
-        }),
-      })
-      savedColumn = await res.json()
+      if (isEdit && column) {
+        const res = await fetch(`/api/columns/${column.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description }),
+        })
+        if (res.redirected || res.url.includes('/login')) {
+          alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
+          return
+        }
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          alert('Error al guardar la columna: ' + (data.error ?? 'Error desconocido'))
+          return
+        }
+        savedColumn = await res.json()
+      } else {
+        const res = await fetch('/api/columns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            competency_key: type !== 'bonus' ? (effectiveCompetencyKey ?? null) : null,
+            period_id: periodId,
+            name,
+            description,
+            type,
+            sort_order: 99,
+          }),
+        })
+        if (res.redirected || res.url.includes('/login')) {
+          alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
+          return
+        }
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          alert('Error al crear la columna: ' + (data.error ?? 'Error desconocido'))
+          return
+        }
+        savedColumn = await res.json()
+      }
+
+      let savedCriteria: Criterion[] | undefined
+      if ((type === 'sumativa' || (type === 'bonus' && bonusWithCriteria) || (type === 'formativa' && formativaWithCriteria)) && criteria.length > 0) {
+        const res = await fetch('/api/criteria', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ column_id: savedColumn.id, criteria }),
+        })
+        if (res.ok) savedCriteria = await res.json()
+      }
+
+      onSave(savedColumn, savedCriteria)
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    } finally {
+      setSaving(false)
     }
-
-    let savedCriteria: Criterion[] | undefined
-
-    if ((type === 'sumativa' || (type === 'bonus' && bonusWithCriteria)) && criteria.length > 0) {
-      const res = await fetch('/api/criteria', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ column_id: savedColumn.id, criteria }),
-      })
-      savedCriteria = await res.json()
-    }
-
-    setSaving(false)
-    onSave(savedColumn, savedCriteria)
   }
 
   return (
     <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-gray-900">
-            {isEdit ? 'Editar columna' : 'Nueva columna de nota'}
-          </h2>
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">
+              {isEdit ? 'Editar evaluación' : 'Nueva evaluación'}
+            </h2>
+            {competency && (
+              <p className={`text-xs mt-0.5 font-medium ${competency.textColor}`}>
+                {competency.short} — {competency.name}
+              </p>
+            )}
+          </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
         </div>
 
@@ -192,12 +226,12 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
 
           {/* Name */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nombre de la columna *</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nombre de la evaluación *</label>
             <input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={type === 'formativa' ? 'Ej: Formativa – Boceto inicial' : type === 'sumativa' ? 'Ej: Sumativa – Personaje Illustrator' : 'Ej: Participación'}
+              placeholder={type === 'formativa' ? 'Ej: Boceto inicial' : type === 'sumativa' ? 'Ej: Personaje en Illustrator' : 'Ej: Participación'}
               className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -239,6 +273,22 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
             />
           </div>
 
+          {/* Criteria toggle for formativa */}
+          {type === 'formativa' && (
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={formativaWithCriteria}
+                onChange={(e) => {
+                  setFormativaWithCriteria(e.target.checked)
+                  if (!e.target.checked) setCriteria([])
+                }}
+                className="w-4 h-4 accent-green-600"
+              />
+              <span className="text-sm font-medium text-gray-700">Calificar con rúbrica (criterios opcionales)</span>
+            </label>
+          )}
+
           {/* Criteria toggle for bonus */}
           {type === 'bonus' && (
             <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -255,8 +305,8 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
             </label>
           )}
 
-          {/* Criteria (for sumativas and bonus-with-criteria) */}
-          {(type === 'sumativa' || (type === 'bonus' && bonusWithCriteria)) && (
+          {/* Criteria */}
+          {(type === 'sumativa' || (type === 'bonus' && bonusWithCriteria) || (type === 'formativa' && formativaWithCriteria)) && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div>
@@ -338,7 +388,7 @@ export default function ColumnModal({ phase, column, defaultType, periodId, cour
             disabled={saving}
             className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
           >
-            {saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear columna'}
+            {saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear evaluación'}
           </button>
         </div>
       </div>

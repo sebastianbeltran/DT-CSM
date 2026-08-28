@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { DEFAULT_PHASES } from '@/lib/types'
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
@@ -18,24 +17,7 @@ export async function POST(req: Request) {
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })
 
-  // Auto-create default DT phases with default columns
-  for (let i = 0; i < DEFAULT_PHASES.length; i++) {
-    const { data: phase } = await supabase
-      .from('phases')
-      .insert({ period_id: period.id, name: DEFAULT_PHASES[i], sort_order: i })
-      .select()
-      .single()
-
-    if (phase) {
-      // Default: 1 formativa + 1 sumativa per phase
-      await supabase.from('grade_columns').insert([
-        { phase_id: phase.id, period_id: period.id, name: 'Formativa 1', type: 'formativa', sort_order: 0 },
-        { phase_id: phase.id, period_id: period.id, name: 'Sumativa 1', type: 'sumativa', sort_order: 1 },
-      ])
-    }
-  }
-
-  // Default color ranges for this period's course
+  // Default color ranges if none exist for this course
   const { data: existingRanges } = await supabase
     .from('color_ranges')
     .select('id')

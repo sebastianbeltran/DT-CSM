@@ -1,4 +1,4 @@
-import type { Grade, GradeColumn, Criterion, CriterionGrade, Period } from './types'
+import type { Grade, GradeColumn, Criterion, CriterionGrade, PeriodCompetency } from './types'
 
 export function computeCriteriaTotal(
   gradeId: string,
@@ -19,15 +19,23 @@ export function getStudentScore(
   )
   if (!grade) return null
 
+  // For sumativa and bonus always use criteria sum; for formativa use it if criteria exist
   if (column.type === 'sumativa' || column.type === 'bonus') {
     const total = computeCriteriaTotal(grade.id, criterionGrades)
     return total > 0 ? total : grade.score ?? null
   }
 
+  if (column.type === 'formativa') {
+    const total = computeCriteriaTotal(grade.id, criterionGrades)
+    if (total > 0) return total
+    return grade.score ?? null
+  }
+
   return grade.score ?? null
 }
 
-export function computePeriodFinal(
+// Calculates weighted grade for a set of columns (used per-competency and for bonus)
+export function computeWeightedGrade(
   studentId: string,
   columns: GradeColumn[],
   grades: Grade[],
@@ -74,6 +82,79 @@ export function computePeriodFinal(
 
   const final = Math.min(base + cappedBonus, 10)
   return Math.round(final * 100) / 100
+}
+
+// Legacy alias (used by components that pass all period columns at once)
+export function computePeriodFinal(
+  studentId: string,
+  columns: GradeColumn[],
+  grades: Grade[],
+  criterionGrades: CriterionGrade[],
+  weights: { formativa: number; sumativa: number },
+  bonusCap: number
+): number | null {
+  return computeWeightedGrade(studentId, columns, grades, criterionGrades, weights, bonusCap)
+}
+
+// Grade for a single competency (its columns only)
+export function computeCompetencyGrade(
+  studentId: string,
+  competencyKey: string,
+  columns: GradeColumn[],
+  grades: Grade[],
+  criterionGrades: CriterionGrade[],
+  weights: { formativa: number; sumativa: number },
+  bonusCap: number
+): number | null {
+  const cols = columns.filter(c => c.competency_key === competencyKey)
+  if (cols.length === 0) return null
+  return computeWeightedGrade(studentId, cols, grades, criterionGrades, weights, bonusCap)
+}
+
+// Period final = weighted average of per-competency grades
+// Weights: manual_weight if set, else proportional to sumativa count
+export function computePeriodFinalFromCompetencies(
+  studentId: string,
+  periodCompetencies: PeriodCompetency[],
+  columns: GradeColumn[],
+  grades: Grade[],
+  criterionGrades: CriterionGrade[],
+  weights: { formativa: number; sumativa: number },
+  bonusCap: number
+): number | null {
+  if (periodCompetencies.length === 0) return null
+
+  // Bonus columns (no competency) are added to every competency's pool
+  const bonusColumns = columns.filter(c => c.type === 'bonus' && !c.competency_key)
+
+  const entries: { grade: number | null; weight: number }[] = periodCompetencies.map(pc => {
+    const pcCols = [
+      ...columns.filter(c => c.competency_key === pc.competency_key),
+      ...bonusColumns,
+    ]
+    const grade = computeWeightedGrade(studentId, pcCols, grades, criterionGrades, weights, bonusCap)
+
+    let weight: number
+    if (pc.manual_weight !== null && pc.manual_weight !== undefined) {
+      weight = Number(pc.manual_weight)
+    } else {
+      const sumativaCount = columns.filter(
+        c => c.competency_key === pc.competency_key && c.type === 'sumativa'
+      ).length
+      weight = Math.max(sumativaCount, 1)
+    }
+
+    return { grade, weight }
+  })
+
+  const withGrades = entries.filter(e => e.grade !== null)
+  if (withGrades.length === 0) return null
+
+  const totalWeight = withGrades.reduce((s, e) => s + e.weight, 0)
+  if (totalWeight === 0) return null
+
+  const weightedSum = withGrades.reduce((s, e) => s + e.grade! * e.weight, 0)
+  return Math.round((weightedSum / totalWeight) * 100) / 100
 }
 
 export function getColorForGrade(

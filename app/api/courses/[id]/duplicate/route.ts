@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
-async function findOrCreatePeriod(courseId: string, name: string, sortOrder: number, weights: any, bonusCap: any) {
+async function findOrCreatePeriod(courseId: string, name: string, sortOrder: number, weights: unknown, bonusCap: unknown) {
   const { data: existing } = await supabase
     .from('periods')
     .select('id')
     .eq('course_id', courseId)
     .eq('name', name)
     .single()
-
   if (existing) return existing.id
 
   const { data } = await supabase
@@ -16,272 +15,151 @@ async function findOrCreatePeriod(courseId: string, name: string, sortOrder: num
     .insert({ course_id: courseId, name, sort_order: sortOrder, grade_weights: weights, bonus_cap: bonusCap })
     .select('id')
     .single()
-
   return data?.id ?? null
 }
 
-async function findOrCreatePhase(periodId: string, name: string, sortOrder: number) {
+async function findOrCreatePeriodCompetency(
+  periodId: string,
+  competencyKey: string,
+  learningObjective: string,
+  contents: string | null,
+  sortOrder: number
+) {
   const { data: existing } = await supabase
-    .from('phases')
+    .from('period_competencies')
     .select('id')
     .eq('period_id', periodId)
-    .eq('name', name)
+    .eq('competency_key', competencyKey)
     .single()
-
   if (existing) return existing.id
 
   const { data } = await supabase
-    .from('phases')
-    .insert({ period_id: periodId, name, sort_order: sortOrder })
+    .from('period_competencies')
+    .insert({ period_id: periodId, competency_key: competencyKey, learning_objective: learningObjective, contents, sort_order: sortOrder })
     .select('id')
     .single()
-
   return data?.id ?? null
 }
 
-async function copyColumnsToPhase(sourcePhaseId: string, targetPhaseId: string, targetPeriodId: string) {
-  const { data: sourceCols } = await supabase
+async function copyColumn(sourceCol: Record<string, unknown>, targetPeriodId: string, competencyKey: string | null) {
+  // Check if column with same name already exists
+  const query = supabase
     .from('grade_columns')
-    .select('*')
-    .eq('phase_id', sourcePhaseId)
-    .order('sort_order')
+    .select('id, has_grades')
+    .eq('period_id', targetPeriodId)
+    .eq('name', sourceCol.name as string)
 
-  let copied = 0
+  const { data: existing } = competencyKey
+    ? await query.eq('competency_key', competencyKey).single()
+    : await query.is('competency_key', null).single()
 
-  for (const col of sourceCols ?? []) {
-    // Check if column with same name already exists in target phase
-    const { data: existing } = await supabase
-      .from('grade_columns')
-      .select('id')
-      .eq('phase_id', targetPhaseId)
-      .eq('name', col.name)
-      .single()
-
-    if (existing) continue // already exists, skip
-
-    const { data: newCol } = await supabase
-      .from('grade_columns')
-      .insert({
-        phase_id: targetPhaseId,
-        period_id: targetPeriodId,
-        name: col.name,
-        description: col.description,
-        type: col.type,
-        sort_order: col.sort_order,
-        has_grades: false,
-      })
-      .select('id')
-      .single()
-
-    copied++
-
-    // Copy criteria for sumativas
-    if (col.type === 'sumativa' && newCol) {
-      const { data: criteria } = await supabase
-        .from('criteria')
-        .select('*')
-        .eq('column_id', col.id)
-        .order('sort_order')
-
-      if (criteria?.length) {
+  if (existing) {
+    // Update description if no grades yet
+    if (!existing.has_grades) {
+      await supabase.from('grade_columns').update({ description: sourceCol.description }).eq('id', existing.id)
+      // Replace criteria
+      const { data: srcCriteria } = await supabase.from('criteria').select('*').eq('column_id', sourceCol.id as string).order('sort_order')
+      if (srcCriteria?.length) {
+        await supabase.from('criteria').delete().eq('column_id', existing.id)
         await supabase.from('criteria').insert(
-          criteria.map((c) => ({
-            column_id: newCol.id,
-            name: c.name,
-            max_score: c.max_score,
-            sort_order: c.sort_order,
-          }))
+          srcCriteria.map((c) => ({ column_id: existing.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order }))
         )
       }
     }
+    return 0
   }
 
-  return copied
+  const { data: newCol } = await supabase
+    .from('grade_columns')
+    .insert({
+      competency_key: competencyKey,
+      period_id: targetPeriodId,
+      name: sourceCol.name,
+      description: sourceCol.description,
+      type: sourceCol.type,
+      sort_order: sourceCol.sort_order,
+      has_grades: false,
+    })
+    .select('id')
+    .single()
+
+  if (newCol) {
+    const { data: srcCriteria } = await supabase.from('criteria').select('*').eq('column_id', sourceCol.id as string).order('sort_order')
+    if (srcCriteria?.length) {
+      await supabase.from('criteria').insert(
+        srcCriteria.map((c) => ({ column_id: newCol.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order }))
+      )
+    }
+  }
+  return 1
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const targetCourseId = params.id
-  const { sourceCourseId, phaseId, columnId } = await req.json()
+  const { sourceCourseId, sourcePeriodId, competencyKey } = await req.json()
 
-  // SINGLE COLUMN copy
-  if (columnId) {
-    const { data: sourceCol } = await supabase
-      .from('grade_columns')
-      .select('*, phases(*, periods(*))')
-      .eq('id', columnId)
-      .single()
+  // ── Single competency copy (from GradeTable "copy to another course") ──
+  if (sourcePeriodId && competencyKey) {
+    const { data: sourcePeriod } = await supabase.from('periods').select('*').eq('id', sourcePeriodId).single()
+    if (!sourcePeriod) return NextResponse.json({ error: 'Periodo no encontrado' }, { status: 404 })
 
-    if (!sourceCol) return NextResponse.json({ error: 'Columna no encontrada' }, { status: 404 })
+    const { data: sourcePC } = await supabase
+      .from('period_competencies').select('*').eq('period_id', sourcePeriodId).eq('competency_key', competencyKey).single()
 
-    const sourcePhase = (sourceCol as any).phases
-    const sourcePeriod = sourcePhase?.periods
-
-    if (!sourcePhase || !sourcePeriod) {
-      return NextResponse.json({ error: 'No se pudo obtener la fase/periodo de la columna' }, { status: 500 })
-    }
-
-    const targetPeriodId = await findOrCreatePeriod(
-      targetCourseId, sourcePeriod.name, sourcePeriod.sort_order,
-      sourcePeriod.grade_weights, sourcePeriod.bonus_cap
-    )
+    const targetPeriodId = await findOrCreatePeriod(targetCourseId, sourcePeriod.name, sourcePeriod.sort_order, sourcePeriod.grade_weights, sourcePeriod.bonus_cap)
     if (!targetPeriodId) return NextResponse.json({ error: 'No se pudo crear el periodo' }, { status: 500 })
 
-    const targetPhaseId = await findOrCreatePhase(targetPeriodId, sourcePhase.name, sourcePhase.sort_order)
-    if (!targetPhaseId) return NextResponse.json({ error: 'No se pudo crear la fase' }, { status: 500 })
+    if (sourcePC) {
+      await findOrCreatePeriodCompetency(targetPeriodId, competencyKey, sourcePC.learning_objective, sourcePC.contents, sourcePC.sort_order)
+    }
 
-    // Check if column already exists
-    const { data: existingCol } = await supabase
-      .from('grade_columns')
-      .select('id, has_grades')
-      .eq('phase_id', targetPhaseId)
-      .eq('name', sourceCol.name)
-      .single()
+    const { data: sourceCols } = await supabase
+      .from('grade_columns').select('*').eq('period_id', sourcePeriodId).eq('competency_key', competencyKey).order('sort_order')
 
-    if (existingCol) {
-      // Update description only if no grades yet
-      if (!existingCol.has_grades) {
-        await supabase.from('grade_columns').update({
-          description: sourceCol.description,
-        }).eq('id', existingCol.id)
+    let copied = 0
+    for (const col of sourceCols ?? []) {
+      copied += await copyColumn(col, targetPeriodId, competencyKey)
+    }
 
-        // Replace criteria
-        if (sourceCol.type === 'sumativa') {
-          const { data: sourceCriteria } = await supabase
-            .from('criteria').select('*').eq('column_id', columnId).order('sort_order')
-          await supabase.from('criteria').delete().eq('column_id', existingCol.id)
-          if (sourceCriteria?.length) {
-            await supabase.from('criteria').insert(
-              sourceCriteria.map((c) => ({ column_id: existingCol.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order }))
-            )
-          }
+    return NextResponse.json({ ok: true, columnsAdded: copied })
+  }
+
+  // ── Full course copy ──
+  if (sourceCourseId) {
+    const { data: sourcePeriods } = await supabase.from('periods').select('*').eq('course_id', sourceCourseId).order('sort_order')
+    if (!sourcePeriods?.length) return NextResponse.json({ error: 'El curso origen no tiene periodos' }, { status: 400 })
+
+    let totalColumns = 0
+
+    for (const period of sourcePeriods) {
+      const targetPeriodId = await findOrCreatePeriod(targetCourseId, period.name, period.sort_order, period.grade_weights, period.bonus_cap)
+      if (!targetPeriodId) continue
+
+      // Copy period_competencies
+      const { data: sourceCompetencies } = await supabase
+        .from('period_competencies').select('*').eq('period_id', period.id).order('sort_order')
+
+      for (const pc of sourceCompetencies ?? []) {
+        await findOrCreatePeriodCompetency(targetPeriodId, pc.competency_key, pc.learning_objective, pc.contents, pc.sort_order)
+
+        // Copy columns for this competency
+        const { data: sourceCols } = await supabase
+          .from('grade_columns').select('*').eq('period_id', period.id).eq('competency_key', pc.competency_key).order('sort_order')
+        for (const col of sourceCols ?? []) {
+          totalColumns += await copyColumn(col, targetPeriodId, pc.competency_key)
         }
-        return NextResponse.json({ ok: true, action: 'updated', columnName: sourceCol.name })
-      } else {
-        return NextResponse.json({ ok: true, action: 'skipped_has_grades', columnName: sourceCol.name })
+      }
+
+      // Copy bonus columns (no competency)
+      const { data: bonusCols } = await supabase
+        .from('grade_columns').select('*').eq('period_id', period.id).is('competency_key', null).eq('type', 'bonus')
+      for (const col of bonusCols ?? []) {
+        totalColumns += await copyColumn(col, targetPeriodId, null)
       }
     }
 
-    // Create new column
-    const { data: newCol } = await supabase
-      .from('grade_columns')
-      .insert({
-        phase_id: targetPhaseId, period_id: targetPeriodId,
-        name: sourceCol.name, description: sourceCol.description,
-        type: sourceCol.type, sort_order: sourceCol.sort_order, has_grades: false,
-      })
-      .select('id').single()
-
-    if (newCol && sourceCol.type === 'sumativa') {
-      const { data: sourceCriteria } = await supabase
-        .from('criteria').select('*').eq('column_id', columnId).order('sort_order')
-      if (sourceCriteria?.length) {
-        await supabase.from('criteria').insert(
-          sourceCriteria.map((c) => ({ column_id: newCol.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order }))
-        )
-      }
-    }
-
-    return NextResponse.json({ ok: true, action: 'created', columnName: sourceCol.name })
+    return NextResponse.json({ ok: true, columnsAdded: totalColumns })
   }
 
-  // SINGLE PHASE copy
-  if (phaseId) {
-    const { data: sourcePhase } = await supabase
-      .from('phases')
-      .select('*, periods(*)')
-      .eq('id', phaseId)
-      .single()
-
-    if (!sourcePhase) return NextResponse.json({ error: 'Fase no encontrada' }, { status: 404 })
-
-    const sourcePeriod = (sourcePhase as any).periods
-
-    // Find or create matching period in target
-    const targetPeriodId = await findOrCreatePeriod(
-      targetCourseId,
-      sourcePeriod.name,
-      sourcePeriod.sort_order,
-      sourcePeriod.grade_weights,
-      sourcePeriod.bonus_cap
-    )
-
-    if (!targetPeriodId) return NextResponse.json({ error: 'No se pudo crear el periodo destino' }, { status: 500 })
-
-    // Find or create matching phase in target period
-    const targetPhaseId = await findOrCreatePhase(targetPeriodId, sourcePhase.name, sourcePhase.sort_order)
-
-    if (!targetPhaseId) return NextResponse.json({ error: 'No se pudo crear la fase destino' }, { status: 500 })
-
-    const copied = await copyColumnsToPhase(phaseId, targetPhaseId, targetPeriodId)
-
-    return NextResponse.json({ ok: true, columnsAdded: copied, phaseName: sourcePhase.name })
-  }
-
-  // FULL COURSE copy (merge mode — never overwrites existing)
-  const { data: sourcePeriods } = await supabase
-    .from('periods')
-    .select('*')
-    .eq('course_id', sourceCourseId)
-    .order('sort_order')
-
-  if (!sourcePeriods?.length) {
-    return NextResponse.json({ error: 'El curso origen no tiene periodos' }, { status: 400 })
-  }
-
-  let totalColumns = 0
-
-  for (const period of sourcePeriods) {
-    const targetPeriodId = await findOrCreatePeriod(
-      targetCourseId,
-      period.name,
-      period.sort_order,
-      period.grade_weights,
-      period.bonus_cap
-    )
-    if (!targetPeriodId) continue
-
-    const { data: phases } = await supabase
-      .from('phases')
-      .select('*')
-      .eq('period_id', period.id)
-      .order('sort_order')
-
-    for (const phase of phases ?? []) {
-      const targetPhaseId = await findOrCreatePhase(targetPeriodId, phase.name, phase.sort_order)
-      if (!targetPhaseId) continue
-      totalColumns += await copyColumnsToPhase(phase.id, targetPhaseId, targetPeriodId)
-    }
-
-    // Bonus columns
-    const { data: bonusCols } = await supabase
-      .from('grade_columns')
-      .select('*')
-      .eq('period_id', period.id)
-      .is('phase_id', null)
-      .eq('type', 'bonus')
-
-    for (const col of bonusCols ?? []) {
-      const { data: existing } = await supabase
-        .from('grade_columns')
-        .select('id')
-        .eq('period_id', targetPeriodId)
-        .eq('name', col.name)
-        .is('phase_id', null)
-        .single()
-
-      if (existing) continue
-
-      await supabase.from('grade_columns').insert({
-        period_id: targetPeriodId,
-        name: col.name,
-        description: col.description,
-        type: 'bonus',
-        sort_order: col.sort_order,
-        has_grades: false,
-      })
-      totalColumns++
-    }
-  }
-
-  return NextResponse.json({ ok: true, columnsAdded: totalColumns })
+  return NextResponse.json({ error: 'Parámetros inválidos' }, { status: 400 })
 }

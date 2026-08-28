@@ -42,40 +42,45 @@ export default function GroupGradeModal({ column, criteria, groups, students, gr
   )
 
   const totalCriteriaScore = criterionScores.reduce((sum, cs) => sum + Number(cs.score), 0)
-  const isSumativa = column.type === 'sumativa'
-  const finalScore = isSumativa ? totalCriteriaScore : parseFloat(score)
+  const totalMaxScore = criteria.reduce((sum, c) => sum + Number(c.max_score), 0)
+  const hasCriteria = criteria.length > 0
+  const finalScore = hasCriteria ? totalCriteriaScore : parseFloat(score)
 
   async function applyToGroup() {
     if (memberStudents.length === 0) { alert('El grupo no tiene integrantes'); return }
-    if (!isSumativa && (isNaN(finalScore) || finalScore < 0 || finalScore > 10)) {
+    if (!hasCriteria && (isNaN(finalScore) || finalScore < 0 || finalScore > 10)) {
       alert('Escribe una nota válida entre 0 y 10'); return
-    }
-    if (isSumativa && Math.abs(totalCriteriaScore - criteria.reduce((s, c) => s + c.max_score, 0)) > 0.01) {
-      // Allow partial grading
     }
 
     setSaving(true)
 
-    const method = overrideAdjusted ? 'PUT' : 'POST'
-    const res = await fetch('/api/grades/group', {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        group_id: selectedGroupId,
-        column_id: column.id,
-        score: isSumativa ? totalCriteriaScore : finalScore,
-        criterion_grades: isSumativa ? criterionScores : undefined,
-      }),
-    })
-
-    const data = await res.json()
-    setSaving(false)
-
-    if (data.ok) {
-      onSave(data.results)
-      onClose()
-    } else {
-      alert('Error: ' + data.error)
+    try {
+      const method = overrideAdjusted ? 'PUT' : 'POST'
+      const res = await fetch('/api/grades/group', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          group_id: selectedGroupId,
+          column_id: column.id,
+          score: hasCriteria ? totalCriteriaScore : finalScore,
+          criterion_grades: hasCriteria ? criterionScores : undefined,
+        }),
+      })
+      if (res.redirected || res.url.includes('/login')) {
+        alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
+        return
+      }
+      const data = await res.json()
+      if (data.ok) {
+        onSave(data.results)
+        onClose()
+      } else {
+        alert('Error: ' + data.error)
+      }
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -152,11 +157,11 @@ export default function GroupGradeModal({ column, criteria, groups, students, gr
           )}
 
           {/* Score input */}
-          {isSumativa ? (
+          {hasCriteria ? (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Puntaje por criterios
-                <span className="ml-2 font-bold text-blue-700">{totalCriteriaScore.toFixed(1)} / 10</span>
+                <span className="ml-2 font-bold text-blue-700">{totalCriteriaScore.toFixed(1)} / {totalMaxScore.toFixed(1)}</span>
               </label>
               <div className="space-y-2">
                 {criteria.map((c) => {

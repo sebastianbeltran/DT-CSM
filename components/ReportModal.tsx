@@ -28,12 +28,10 @@ export default function ReportModal({ student, course, period, columns, phases, 
   const finalGrade = computePeriodFinal(student.id, columns, grades, criterionGrades, weights, bonusCap)
 
   useEffect(() => {
-    // Load existing report
     fetch(`/api/reports?studentId=${student.id}&periodId=${period.id}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data[0]?.content) setContent(data[0].content)
-      })
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => { if (data[0]?.content) setContent(data[0].content) })
+      .catch(() => {})
   }, [student.id, period.id])
 
   async function generate() {
@@ -62,36 +60,51 @@ export default function ReportModal({ student, course, period, columns, phases, 
         }
       })
 
-    const res = await fetch('/api/ai/report', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        studentName: student.name,
-        courseName: course.name,
-        periodName: period.name,
-        columns: columnData,
-        finalGrade,
-        absences: 0,
-        totalSessions: 0,
-      }),
-    })
-
-    const data = await res.json()
-    if (data.report) setContent(data.report)
-    setGenerating(false)
+    try {
+      const res = await fetch('/api/ai/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentName: student.name,
+          courseName: course.name,
+          periodName: period.name,
+          columns: columnData,
+          finalGrade,
+          absences: 0,
+          totalSessions: 0,
+        }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert('Error al generar el informe: ' + (data.error ?? 'Error desconocido'))
+        return
+      }
+      const data = await res.json()
+      if (data.report) setContent(data.report)
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    } finally {
+      setGenerating(false)
+    }
   }
 
   async function saveReport() {
     if (!content.trim()) return
     setSaving(true)
-    await fetch('/api/reports', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: student.id, period_id: period.id, content }),
-    })
-    setSaved(true)
-    setSaving(false)
-    setTimeout(() => setSaved(false), 2000)
+    try {
+      const res = await fetch('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: student.id, period_id: period.id, content }),
+      })
+      if (!res.ok) { alert('Error al guardar el informe.'); return }
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   function printReport() {

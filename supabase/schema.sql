@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS periods (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- DT Phases (fases de design thinking por periodo)
+-- DT Phases (deprecated — kept for backwards compatibility)
 CREATE TABLE IF NOT EXISTS phases (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   period_id UUID NOT NULL REFERENCES periods(id) ON DELETE CASCADE,
@@ -55,10 +55,24 @@ CREATE TABLE IF NOT EXISTS phases (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Period competencies (competencias evaluadas en cada periodo)
+CREATE TABLE IF NOT EXISTS period_competencies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  period_id UUID NOT NULL REFERENCES periods(id) ON DELETE CASCADE,
+  competency_key TEXT NOT NULL CHECK (competency_key IN ('CTP', 'CC', 'CTT')),
+  learning_objective TEXT NOT NULL,
+  contents TEXT,
+  manual_weight NUMERIC(6,4),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(period_id, competency_key)
+);
+
 -- Grade columns (columnas de nota)
 CREATE TABLE IF NOT EXISTS grade_columns (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   phase_id UUID REFERENCES phases(id) ON DELETE CASCADE,
+  competency_key TEXT CHECK (competency_key IN ('CTP', 'CC', 'CTT')),
   period_id UUID REFERENCES periods(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
@@ -169,7 +183,9 @@ CREATE INDEX IF NOT EXISTS idx_grades_column ON grades(column_id);
 CREATE INDEX IF NOT EXISTS idx_criterion_grades_grade ON criterion_grades(grade_id);
 CREATE INDEX IF NOT EXISTS idx_periods_course ON periods(course_id);
 CREATE INDEX IF NOT EXISTS idx_phases_period ON phases(period_id);
+CREATE INDEX IF NOT EXISTS idx_period_competencies_period ON period_competencies(period_id);
 CREATE INDEX IF NOT EXISTS idx_columns_phase ON grade_columns(phase_id);
+CREATE INDEX IF NOT EXISTS idx_columns_competency ON grade_columns(competency_key);
 CREATE INDEX IF NOT EXISTS idx_columns_period ON grade_columns(period_id);
 CREATE INDEX IF NOT EXISTS idx_criteria_column ON criteria(column_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance_records(session_id);
@@ -185,6 +201,7 @@ ALTER TABLE courses DISABLE ROW LEVEL SECURITY;
 ALTER TABLE students DISABLE ROW LEVEL SECURITY;
 ALTER TABLE periods DISABLE ROW LEVEL SECURITY;
 ALTER TABLE phases DISABLE ROW LEVEL SECURITY;
+ALTER TABLE period_competencies DISABLE ROW LEVEL SECURITY;
 ALTER TABLE grade_columns DISABLE ROW LEVEL SECURITY;
 ALTER TABLE criteria DISABLE ROW LEVEL SECURITY;
 ALTER TABLE grades DISABLE ROW LEVEL SECURITY;

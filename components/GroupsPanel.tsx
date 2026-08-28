@@ -22,6 +22,11 @@ export default function GroupsPanel({ courseId, students, groups, onGroupsChange
   const [editingId, setEditingId] = useState<string | null>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [creating, setCreating] = useState(false)
+
+  function startCreating() {
+    setNewGroupName(`Grupo ${groups.length + 1}`)
+    setCreating(true)
+  }
   const [selectedMembers, setSelectedMembers] = useState<Set<string>>(new Set())
   const [editName, setEditName] = useState('')
   const [editMembers, setEditMembers] = useState<Set<string>>(new Set())
@@ -30,27 +35,41 @@ export default function GroupsPanel({ courseId, students, groups, onGroupsChange
   async function createGroup() {
     if (!newGroupName.trim()) return
     setSaving(true)
-    const res = await fetch('/api/groups', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        course_id: courseId,
-        name: newGroupName.trim(),
-        member_ids: Array.from(selectedMembers),
-      }),
-    })
-    const data = await res.json()
-    if (data.id) {
-      const newGroup = {
-        ...data,
-        work_group_members: Array.from(selectedMembers).map((sid) => ({ student_id: sid })),
+    try {
+      const res = await fetch('/api/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_id: courseId,
+          name: newGroupName.trim(),
+          member_ids: Array.from(selectedMembers),
+        }),
+      })
+      if (res.redirected || res.url.includes('/login')) {
+        alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
+        return
       }
-      onGroupsChange([...groups, newGroup])
-      setNewGroupName('')
-      setSelectedMembers(new Set())
-      setCreating(false)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert('Error al crear el grupo: ' + (data.error ?? 'Error desconocido'))
+        return
+      }
+      const data = await res.json()
+      if (data.id) {
+        const newGroup = {
+          ...data,
+          work_group_members: Array.from(selectedMembers).map((sid) => ({ student_id: sid })),
+        }
+        onGroupsChange([...groups, newGroup])
+        setNewGroupName('')
+        setSelectedMembers(new Set())
+        setCreating(false)
+      }
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
   }
 
   function startEdit(group: Group) {
@@ -61,26 +80,37 @@ export default function GroupsPanel({ courseId, students, groups, onGroupsChange
 
   async function saveEdit(groupId: string) {
     setSaving(true)
-    await fetch(`/api/groups/${groupId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: editName, member_ids: Array.from(editMembers) }),
-    })
-    onGroupsChange(
-      groups.map((g) =>
-        g.id === groupId
-          ? { ...g, name: editName, work_group_members: Array.from(editMembers).map((sid) => ({ student_id: sid })) }
-          : g
+    try {
+      const res = await fetch(`/api/groups/${groupId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: editName, member_ids: Array.from(editMembers) }),
+      })
+      if (!res.ok) { alert('Error al guardar el grupo.'); return }
+      onGroupsChange(
+        groups.map((g) =>
+          g.id === groupId
+            ? { ...g, name: editName, work_group_members: Array.from(editMembers).map((sid) => ({ student_id: sid })) }
+            : g
+        )
       )
-    )
-    setEditingId(null)
-    setSaving(false)
+      setEditingId(null)
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function deleteGroup(groupId: string, name: string) {
     if (!confirm(`¿Eliminar el grupo "${name}"?`)) return
-    await fetch(`/api/groups/${groupId}`, { method: 'DELETE' })
-    onGroupsChange(groups.filter((g) => g.id !== groupId))
+    try {
+      const res = await fetch(`/api/groups/${groupId}`, { method: 'DELETE' })
+      if (!res.ok) { alert('Error al eliminar el grupo.'); return }
+      onGroupsChange(groups.filter((g) => g.id !== groupId))
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    }
   }
 
   function toggleMember(set: Set<string>, sid: string, setter: (s: Set<string>) => void) {
@@ -182,7 +212,7 @@ export default function GroupsPanel({ courseId, students, groups, onGroupsChange
                 <button onClick={createGroup} disabled={saving || !newGroupName.trim()} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg disabled:opacity-50">
                   {saving ? '...' : 'Crear'}
                 </button>
-                <button onClick={() => { setCreating(false); setSelectedMembers(new Set()) }} className="text-xs text-gray-400 hover:text-gray-600">Cancelar</button>
+                <button onClick={() => { setCreating(false); setNewGroupName(''); setSelectedMembers(new Set()) }} className="text-xs text-gray-400 hover:text-gray-600">Cancelar</button>
               </div>
               <div className="px-4 py-3">
                 <p className="text-xs text-gray-500 mb-2">Selecciona las integrantes:</p>
@@ -205,7 +235,7 @@ export default function GroupsPanel({ courseId, students, groups, onGroupsChange
             </div>
           ) : (
             <button
-              onClick={() => setCreating(true)}
+              onClick={startCreating}
               className="w-full border-2 border-dashed border-gray-200 rounded-xl py-3 text-sm text-blue-600 hover:border-blue-300 hover:bg-blue-50 transition-colors"
             >
               + Nuevo grupo

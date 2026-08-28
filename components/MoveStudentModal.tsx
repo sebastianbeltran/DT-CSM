@@ -24,8 +24,9 @@ export default function MoveStudentModal({ student, currentCourseId, yearId, onM
 
   useEffect(() => {
     fetch(`/api/courses?yearId=${yearId}`)
-      .then((r) => r.json())
+      .then((r) => r.ok ? r.json() : [])
       .then((data) => setCourses((data ?? []).filter((c: Course) => c.id !== currentCourseId)))
+      .catch(() => {})
   }, [yearId, currentCourseId])
 
   function extractGrade(name: string): string {
@@ -52,17 +53,23 @@ export default function MoveStudentModal({ student, currentCourseId, yearId, onM
     }
 
     setMoving(true)
-    await fetch(`/api/students/${student.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        course_id: selectedCourseId,
-        previous_course_id: currentCourseId,
-      }),
-    })
-    setMoving(false)
-    onMoved(student.id)
-    onClose()
+    try {
+      const res = await fetch(`/api/students/${student.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_id: selectedCourseId,
+          previous_course_id: currentCourseId,
+        }),
+      })
+      if (!res.ok) { alert('Error al mover la estudiante.'); return }
+      onMoved(student.id)
+      onClose()
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    } finally {
+      setMoving(false)
+    }
   }
 
   return (

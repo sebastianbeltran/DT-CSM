@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { computePeriodFinal } from '@/lib/calculations'
+import { computePeriodFinalFromCompetencies } from '@/lib/calculations'
+import type { PeriodCompetency } from '@/lib/types'
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
@@ -16,6 +17,7 @@ export async function GET(req: Request) {
     { data: period },
     { data: students },
     { data: reports },
+    { data: periodCompetencies },
     { data: columns },
     { data: grades },
     { data: criterionGrades },
@@ -24,6 +26,7 @@ export async function GET(req: Request) {
     supabase.from('periods').select('*').eq('id', periodId).single(),
     supabase.from('students').select('*').eq('course_id', courseId).eq('is_archived', false).order('sort_order'),
     supabase.from('reports').select('*').eq('period_id', periodId),
+    supabase.from('period_competencies').select('*').eq('period_id', periodId).order('sort_order'),
     supabase.from('grade_columns').select('*').eq('period_id', periodId),
     supabase.from('grades').select('*'),
     supabase.from('criterion_grades').select('*'),
@@ -31,6 +34,7 @@ export async function GET(req: Request) {
 
   const weights = period?.grade_weights ?? course?.grade_weights ?? { formativa: 40, sumativa: 60 }
   const bonusCap = period?.bonus_cap ?? course?.bonus_cap ?? 10
+  const allPeriodCompetencies: PeriodCompetency[] = (periodCompetencies ?? []) as PeriodCompetency[]
 
   let content = `INFORMES DE DESEMPEÑO\n`
   content += `Curso: ${course?.name ?? ''} | Periodo: ${period?.name ?? ''}\n`
@@ -38,8 +42,9 @@ export async function GET(req: Request) {
 
   for (const student of students ?? []) {
     const report = reports?.find((r) => r.student_id === student.id)
-    const final = computePeriodFinal(
+    const final = computePeriodFinalFromCompetencies(
       student.id,
+      allPeriodCompetencies,
       (columns ?? []) as any,
       (grades ?? []) as any,
       (criterionGrades ?? []) as any,

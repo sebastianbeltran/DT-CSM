@@ -1,8 +1,15 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Course, Period, Student, Phase, GradeColumn, Criterion, Grade, CriterionGrade, ColorRange } from '@/lib/types'
-import { computePeriodFinal, getStudentScore, getColorForGrade } from '@/lib/calculations'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
+import type { Course, Period, Student, GradeColumn, Criterion, Grade, CriterionGrade, ColorRange, PeriodCompetency } from '@/lib/types'
+import type { CompetencyKey } from '@/lib/competencies'
+import { COMPETENCIES } from '@/lib/competencies'
+import {
+  computePeriodFinalFromCompetencies,
+  computeCompetencyGrade,
+  getStudentScore,
+  getColorForGrade,
+} from '@/lib/calculations'
 import QuickGradeMode from './QuickGradeMode'
 import ColumnModal from './ColumnModal'
 import ReportModal from './ReportModal'
@@ -27,7 +34,7 @@ interface GradeTableProps {
 }
 
 export default function GradeTable({ course, period, students, initialGroups, onArchiveStudent }: GradeTableProps) {
-  const [phases, setPhases] = useState<Phase[]>([])
+  const [periodCompetencies, setPeriodCompetencies] = useState<PeriodCompetency[]>([])
   const [columns, setColumns] = useState<GradeColumn[]>([])
   const [criteria, setCriteria] = useState<Criterion[]>([])
   const [grades, setGrades] = useState<Grade[]>([])
@@ -36,7 +43,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [loading, setLoading] = useState(true)
 
   const [quickGradeCol, setQuickGradeCol] = useState<GradeColumn | null>(null)
-  const [columnModal, setColumnModal] = useState<{ phase?: Phase; column?: GradeColumn; type?: string } | null>(null)
+  const [columnModal, setColumnModal] = useState<{ competencyKey?: CompetencyKey; column?: GradeColumn; type?: string } | null>(null)
   const [reportStudent, setReportStudent] = useState<Student | null>(null)
   const [showColorConfig, setShowColorConfig] = useState(false)
   const [showGroupsPanel, setShowGroupsPanel] = useState(false)
@@ -48,8 +55,6 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [searchTerm, setSearchTerm] = useState('')
   const [sortByGrade, setSortByGrade] = useState<'asc' | 'desc' | null>(null)
   const [showArchived, setShowArchived] = useState(false)
-  const [addingPhase, setAddingPhase] = useState<string | null>(null)
-  const [newPhaseName, setNewPhaseName] = useState('')
 
   const [weights, setWeights] = useState(period.grade_weights ?? course.grade_weights ?? { formativa: 40, sumativa: 60 })
   const [bonusCap, setBonusCap] = useState(period.bonus_cap ?? course.bonus_cap ?? 10)
@@ -61,119 +66,162 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
   async function loadArchived() {
     setLoadingArchived(true)
-    const res = await fetch(`/api/students/archived?courseId=${course.id}`)
-    const data = await res.json()
-    setArchivedStudents(data)
-    setLoadingArchived(false)
+    try {
+      const res = await fetch(`/api/students/archived?courseId=${course.id}`)
+      const data = await res.json()
+      setArchivedStudents(data)
+    } catch {
+      // silently fail
+    } finally {
+      setLoadingArchived(false)
+    }
   }
 
   async function reactivateStudent(student: Student) {
-    await fetch(`/api/students/${student.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_archived: false, archived_at: null, archive_reason: null }),
-    })
-    setArchivedStudents((prev) => prev.filter((s) => s.id !== student.id))
-    setLocalStudents((prev) => [...prev, { ...student, is_archived: false }].sort((a, b) => a.sort_order - b.sort_order))
+    try {
+      const res = await fetch(`/api/students/${student.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_archived: false, archived_at: null, archive_reason: null }),
+      })
+      if (!res.ok) { alert('Error al reactivar la estudiante.'); return }
+      setArchivedStudents((prev) => prev.filter((s) => s.id !== student.id))
+      setLocalStudents((prev) => [...prev, { ...student, is_archived: false }].sort((a, b) => a.sort_order - b.sort_order))
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    }
   }
 
   async function deleteStudentPermanently(student: Student) {
     if (!confirm(`¿Eliminar PERMANENTEMENTE a "${student.name}"?\n\nEsta acción borra todas sus notas, asistencia e informes y NO se puede deshacer.`)) return
-    await fetch(`/api/students/${student.id}/permanent`, { method: 'DELETE' })
-    setArchivedStudents((prev) => prev.filter((s) => s.id !== student.id))
+    try {
+      const res = await fetch(`/api/students/${student.id}/permanent`, { method: 'DELETE' })
+      if (!res.ok) { alert('Error al eliminar la estudiante.'); return }
+      setArchivedStudents((prev) => prev.filter((s) => s.id !== student.id))
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    }
   }
 
   async function addStudentInline() {
     if (!newStudentName.trim()) return
     const formatted = newStudentName.trim().toUpperCase()
-    const res = await fetch('/api/students', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ course_id: course.id, name: formatted }),
-    })
-    const data = await res.json()
-    if (data.id) {
-      setLocalStudents((prev) => [...prev, data].sort((a, b) => a.sort_order - b.sort_order))
-      setNewStudentName('')
-      setAddingStudentInline(false)
+    try {
+      const res = await fetch('/api/students', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ course_id: course.id, name: formatted }),
+      })
+      if (res.redirected || res.url.includes('/login')) {
+        alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
+        return
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert('Error al agregar la estudiante: ' + (data.error ?? 'Error desconocido'))
+        return
+      }
+      const data = await res.json()
+      if (data.id) {
+        setLocalStudents((prev) => [...prev, data].sort((a, b) => a.sort_order - b.sort_order))
+        setNewStudentName('')
+        setAddingStudentInline(false)
+      }
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
     }
   }
 
-  useEffect(() => {
-    loadData()
-  }, [period.id, course.id])
+  useEffect(() => { loadData() }, [period.id, course.id])
 
   async function loadData() {
     setLoading(true)
-    const [phasesRes, columnsRes, gradesRes, cgRes, crRes, colorRes] = await Promise.all([
-      fetch(`/api/phases?periodId=${period.id}`).then((r) => r.json()),
-      fetch(`/api/columns?periodId=${period.id}`).then((r) => r.json()),
-      fetch(`/api/grades?periodId=${period.id}`).then((r) => r.json()),
-      fetch(`/api/criterion-grades?periodId=${period.id}`).then((r) => r.json()),
-      fetch(`/api/criteria?periodId=${period.id}`).then((r) => r.json()),
-      fetch(`/api/color-ranges?courseId=${course.id}`).then((r) => r.json()),
-    ])
-    setPhases(phasesRes)
-    setColumns(columnsRes)
-    setGrades(gradesRes)
-    setCriterionGrades(cgRes)
-    setCriteria(crRes)
-    setColorRanges(colorRes)
-    setLoading(false)
+    try {
+      const [pcRes, columnsRes, gradesRes, cgRes, crRes, colorRes] = await Promise.all([
+        fetch(`/api/period-competencies?periodId=${period.id}`).then((r) => r.json()),
+        fetch(`/api/columns?periodId=${period.id}`).then((r) => r.json()),
+        fetch(`/api/grades?periodId=${period.id}`).then((r) => r.json()),
+        fetch(`/api/criterion-grades?periodId=${period.id}`).then((r) => r.json()),
+        fetch(`/api/criteria?periodId=${period.id}`).then((r) => r.json()),
+        fetch(`/api/color-ranges?courseId=${course.id}`).then((r) => r.json()),
+      ])
+      setPeriodCompetencies(pcRes)
+      setColumns(columnsRes)
+      setGrades(gradesRes)
+      setCriterionGrades(cgRes)
+      setCriteria(crRes)
+      setColorRanges(colorRes)
+    } catch {
+      alert('Error al cargar la tabla de notas. Verifica tu conexión e intenta recargar la página.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const saveGrade = useCallback(async (studentId: string, columnId: string, score: number | null) => {
     if (score === null) {
-      await fetch('/api/grades', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, column_id: columnId }),
-      })
-      setGrades((prev) => prev.filter((g) => !(g.student_id === studentId && g.column_id === columnId)))
+      try {
+        const res = await fetch('/api/grades', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ student_id: studentId, column_id: columnId }),
+        })
+        if (!res.ok) { console.error('Grade delete failed', res.status); return }
+        setGrades((prev) => prev.filter((g) => !(g.student_id === studentId && g.column_id === columnId)))
+      } catch {
+        console.error('Grade delete network error')
+      }
       return
     }
-
-    const res = await fetch('/api/grades', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: studentId, column_id: columnId, score }),
-    })
-    const data = await res.json()
-    if (data.id) {
-      setGrades((prev) => {
-        const existing = prev.find((g) => g.student_id === studentId && g.column_id === columnId)
-        if (existing) return prev.map((g) => (g.id === existing.id ? data : g))
-        return [...prev, data]
+    try {
+      const res = await fetch('/api/grades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: studentId, column_id: columnId, score }),
       })
-      setColumns((prev) => prev.map((c) => (c.id === columnId ? { ...c, has_grades: true } : c)))
+      if (!res.ok) { console.error('Grade save failed', res.status); return }
+      const data = await res.json()
+      if (data.id) {
+        setGrades((prev) => {
+          const existing = prev.find((g) => g.student_id === studentId && g.column_id === columnId)
+          if (existing) return prev.map((g) => (g.id === existing.id ? data : g))
+          return [...prev, data]
+        })
+        setColumns((prev) => prev.map((c) => (c.id === columnId ? { ...c, has_grades: true } : c)))
+      }
+    } catch {
+      console.error('Grade save network error')
     }
   }, [])
 
-  async function addPhase(periodId: string) {
-    if (!newPhaseName.trim()) return
-    const res = await fetch('/api/phases', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ period_id: periodId, name: newPhaseName.trim(), sort_order: phases.length }),
-    })
-    const data = await res.json()
-    if (data.id) {
-      setPhases((prev) => [...prev, data])
-      // Reload columns to get default columns
-      const colsRes = await fetch(`/api/columns?periodId=${period.id}`).then((r) => r.json())
-      setColumns(colsRes)
-    }
-    setNewPhaseName('')
-    setAddingPhase(null)
-  }
-
   async function deleteColumn(col: GradeColumn) {
-    if (!confirm(`¿Eliminar la columna "${col.name}"? ${col.has_grades ? 'ADVERTENCIA: tiene notas registradas que se perderán.' : ''}`)) return
-    await fetch(`/api/columns/${col.id}`, { method: 'DELETE' })
-    setColumns((prev) => prev.filter((c) => c.id !== col.id))
+    if (!confirm(`¿Eliminar la evaluación "${col.name}"? ${col.has_grades ? 'ADVERTENCIA: tiene notas registradas que se perderán.' : ''}`)) return
+    try {
+      const res = await fetch(`/api/columns/${col.id}`, { method: 'DELETE' })
+      if (!res.ok) { alert('Error al eliminar la evaluación.'); return }
+      setColumns((prev) => prev.filter((c) => c.id !== col.id))
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    }
   }
 
-  async function onColumnSaved(column: GradeColumn, newCriteria?: Criterion[]) {
+  async function updateCompetencyWeight(pc: PeriodCompetency, manualWeight: number | null) {
+    try {
+      const res = await fetch(`/api/period-competencies/${pc.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual_weight: manualWeight }),
+      })
+      if (!res.ok) { alert('Error al guardar el peso.'); return }
+      setPeriodCompetencies((prev) =>
+        prev.map((p) => p.id === pc.id ? { ...p, manual_weight: manualWeight } : p)
+      )
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    }
+  }
+
+  function onColumnSaved(column: GradeColumn, newCriteria?: Criterion[]) {
     const exists = columns.find((c) => c.id === column.id)
     if (exists) {
       setColumns((prev) => prev.map((c) => (c.id === column.id ? column : c)))
@@ -186,7 +234,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
     setColumnModal(null)
   }
 
-  async function onQuickGradeSaved(savedGrades: Grade[], savedCriterionGrades: CriterionGrade[]) {
+  function onQuickGradeSaved(savedGrades: Grade[], savedCriterionGrades: CriterionGrade[]) {
     setGrades((prev) => {
       let updated = [...prev]
       for (const g of savedGrades) {
@@ -210,12 +258,14 @@ export default function GradeTable({ course, period, students, initialGroups, on
     }
   }
 
+  const bonusColumns = columns.filter((c) => c.type === 'bonus' && !c.competency_key)
+
   const filteredStudents = localStudents
     .filter((s) => !searchTerm || s.name.toLowerCase().includes(searchTerm.toLowerCase()))
 
   const studentsWithGrades = filteredStudents.map((s) => ({
     ...s,
-    finalGrade: computePeriodFinal(s.id, columns, grades, criterionGrades, weights, bonusCap),
+    finalGrade: computePeriodFinalFromCompetencies(s.id, periodCompetencies, columns, grades, criterionGrades, weights, bonusCap),
   }))
 
   const sortedStudents = sortByGrade
@@ -226,15 +276,31 @@ export default function GradeTable({ course, period, students, initialGroups, on
       })
     : studentsWithGrades
 
-  const phaseColumns = columns.filter((c) => c.phase_id)
-  const bonusColumns = columns.filter((c) => c.type === 'bonus' && !c.phase_id)
-
   const atRisk = sortedStudents.filter((s) => s.finalGrade !== null && s.finalGrade < 6.5)
+
+  // Auto-weights for display
+  function getCompetencyWeight(pc: PeriodCompetency): number {
+    if (pc.manual_weight !== null && pc.manual_weight !== undefined) return Number(pc.manual_weight)
+    return Math.max(columns.filter(c => c.competency_key === pc.competency_key && c.type === 'sumativa').length, 1)
+  }
+  const totalAutoWeight = periodCompetencies.reduce((s, pc) => s + getCompetencyWeight(pc), 0)
 
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-gray-400">Cargando tabla de notas...</div>
+      </div>
+    )
+  }
+
+  if (periodCompetencies.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-400">
+        <div className="text-center">
+          <div className="text-4xl mb-3">📋</div>
+          <p className="font-medium text-gray-600">Este trimestre no tiene competencias configuradas.</p>
+          <p className="text-sm mt-1">Elimina el trimestre y créalo de nuevo con el archivo de competencias.</p>
+        </div>
       </div>
     )
   }
@@ -282,13 +348,18 @@ export default function GradeTable({ course, period, students, initialGroups, on
             weights={weights}
             bonusCap={bonusCap}
             onSave={async (w, bc) => {
-              await fetch(`/api/periods/${period.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ grade_weights: w, bonus_cap: bc }),
-              })
-              setWeights(w)
-              setBonusCap(bc)
+              try {
+                const res = await fetch(`/api/periods/${period.id}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ grade_weights: w, bonus_cap: bc }),
+                })
+                if (!res.ok) { alert('Error al guardar las ponderaciones.'); return }
+                setWeights(w)
+                setBonusCap(bc)
+              } catch {
+                alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+              }
             }}
           />
         </div>
@@ -298,42 +369,57 @@ export default function GradeTable({ course, period, students, initialGroups, on
       <div className="grade-table-wrapper scrollbar-thin flex-1">
         <table className="grade-table">
           <thead>
-            {/* Phase header row */}
+            {/* Competency header row */}
             <tr>
               <th className="col-sticky px-3 py-2 text-left text-xs font-semibold text-gray-600 bg-gray-50 border-r-2 border-gray-200 min-w-48">
                 Estudiante
               </th>
 
-              {phases.map((phase) => {
-                const pCols = phaseColumns.filter((c) => c.phase_id === phase.id)
+              {periodCompetencies.map((pc) => {
+                const meta = COMPETENCIES[pc.competency_key as CompetencyKey]
+                const pcCols = columns.filter(c => c.competency_key === pc.competency_key)
+                const colSpan = Math.max(pcCols.length, 1)
+                const weightPct = totalAutoWeight > 0
+                  ? Math.round((getCompetencyWeight(pc) / totalAutoWeight) * 100)
+                  : 0
+
                 return (
                   <th
-                    key={phase.id}
-                    colSpan={pCols.length || 1}
-                    className="px-2 py-2 text-xs font-semibold text-blue-800 bg-blue-50 text-center border-r-2 border-blue-100"
+                    key={pc.id}
+                    colSpan={colSpan + 1} // +1 for the competency grade column
+                    className={`px-2 py-2 text-xs font-semibold text-center border-r-2 ${meta.bgColor} ${meta.textColor} ${meta.borderColor}`}
                   >
-                    <div className="flex items-center justify-center gap-1">
-                      <span>{phase.name}</span>
+                    <div className="flex items-center justify-center gap-2 flex-wrap">
+                      <span>{meta.short} — {meta.name}</span>
                       <button
-                        onClick={() => setColumnModal({ phase, type: 'formativa' })}
-                        className="text-blue-400 hover:text-blue-600 text-xs ml-1"
-                        title="Agregar columna"
+                        onClick={() => setColumnModal({ competencyKey: pc.competency_key as CompetencyKey, type: 'formativa' })}
+                        className="opacity-70 hover:opacity-100 text-xs ml-1"
+                        title="Agregar evaluación"
                       >
                         +
                       </button>
-                      <CopyPhaseButton
-                        phaseId={phase.id}
-                        phaseName={phase.name}
-                        courseId={course.id}
+                      <CopyCompetencyButton
+                        periodId={period.id}
+                        competencyKey={pc.competency_key}
                         yearId={course.school_year_id}
-                        onDone={() => loadData()}
+                        courseId={course.id}
+                      />
+                      <CompetencyWeightBadge
+                        pc={pc}
+                        weightPct={weightPct}
+                        onSave={(w) => updateCompetencyWeight(pc, w)}
                       />
                     </div>
+                    {pc.learning_objective && (
+                      <p className="text-xs font-normal opacity-60 mt-0.5 max-w-xs mx-auto truncate" title={pc.learning_objective}>
+                        {pc.learning_objective}
+                      </p>
+                    )}
                   </th>
                 )
               })}
 
-              {/* Bonus */}
+              {/* Bonus header */}
               {bonusColumns.length > 0 && (
                 <th
                   colSpan={bonusColumns.length}
@@ -342,10 +428,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                   Bonus
                 </th>
               )}
-              <th
-                colSpan={1}
-                className="px-2 py-2 text-xs font-semibold text-gray-600 bg-gray-50 text-center"
-              >
+              <th className="px-2 py-2 text-xs font-semibold text-gray-500 bg-gray-50 text-center">
                 <button
                   onClick={() => setColumnModal({ type: 'bonus' })}
                   className="text-purple-500 hover:text-purple-700 text-xs"
@@ -355,7 +438,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                 </button>
               </th>
 
-              <th className="px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 text-center min-w-20">
+              <th className="px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 text-center min-w-24">
                 Final
               </th>
               <th className="px-2 py-2 text-xs font-semibold text-gray-500 bg-gray-50 text-center min-w-20">
@@ -367,32 +450,43 @@ export default function GradeTable({ course, period, students, initialGroups, on
             <tr>
               <th className="col-sticky px-3 py-1.5 text-left text-xs text-gray-500 bg-gray-100 border-r-2 border-gray-200"></th>
 
-              {phases.map((phase) => {
-                const pCols = phaseColumns.filter((c) => c.phase_id === phase.id)
-                if (pCols.length === 0) {
-                  return (
-                    <th key={phase.id} className="px-2 py-1.5 text-center border-r-2 border-blue-100 bg-blue-50/50">
-                      <button
-                        onClick={() => setColumnModal({ phase, type: 'formativa' })}
-                        className="text-xs text-blue-400 hover:text-blue-600"
-                      >
-                        + columna
-                      </button>
+              {periodCompetencies.map((pc) => {
+                const meta = COMPETENCIES[pc.competency_key as CompetencyKey]
+                const pcCols = columns.filter(c => c.competency_key === pc.competency_key)
+
+                return (
+                  <Fragment key={pc.id}>
+                    {pcCols.length === 0 ? (
+                      <th className={`px-2 py-1.5 text-center border-r ${meta.bgColor} opacity-50`}>
+                        <button
+                          onClick={() => setColumnModal({ competencyKey: pc.competency_key as CompetencyKey, type: 'formativa' })}
+                          className={`text-xs ${meta.textColor} hover:opacity-100`}
+                        >
+                          + evaluación
+                        </button>
+                      </th>
+                    ) : (
+                      pcCols.map((col) => {
+                        const colCriteria = criteria.filter((c) => c.column_id === col.id)
+                        return (
+                          <ColumnHeader
+                            key={col.id}
+                            col={col}
+                            criteria={colCriteria}
+                            hasGroups={groups.length > 0}
+                            onEdit={() => setColumnModal({ column: col })}
+                            onDelete={() => deleteColumn(col)}
+                            onQuickGrade={() => (col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0)) && setQuickGradeCol(col)}
+                            onGroupGrade={() => groups.length > 0 && setGroupGradeCol(col)}
+                          />
+                        )
+                      })
+                    )}
+                    <th className={`px-2 py-1.5 text-center text-xs font-semibold border-r-2 ${meta.bgColor} ${meta.textColor} ${meta.borderColor}`}>
+                      Nota {meta.short}
                     </th>
-                  )
-                }
-                return pCols.map((col) => (
-                  <ColumnHeader
-                    key={col.id}
-                    col={col}
-                    criteria={criteria.filter((c) => c.column_id === col.id)}
-                    hasGroups={groups.length > 0}
-                    onEdit={() => setColumnModal({ column: col })}
-                    onDelete={() => deleteColumn(col)}
-                    onQuickGrade={() => col.type === 'sumativa' && setQuickGradeCol(col)}
-                    onGroupGrade={() => groups.length > 0 && setGroupGradeCol(col)}
-                  />
-                ))
+                  </Fragment>
+                )
               })}
 
               {bonusColumns.map((col) => {
@@ -411,11 +505,9 @@ export default function GradeTable({ course, period, students, initialGroups, on
                 )
               })}
 
-              {/* Add bonus placeholder */}
               <th className="px-2 py-1.5 bg-gray-100"></th>
-
               <th className="px-3 py-1.5 text-center text-xs text-gray-500 bg-gray-100">
-                Pond. {weights.formativa}F/{weights.sumativa}S
+                Form {weights.formativa}% / Sum {weights.sumativa}%
               </th>
               <th className="px-2 py-1.5 bg-gray-100"></th>
             </tr>
@@ -453,24 +545,42 @@ export default function GradeTable({ course, period, students, initialGroups, on
                     </div>
                   </td>
 
-                  {phases.map((phase) => {
-                    const pCols = phaseColumns.filter((c) => c.phase_id === phase.id)
-                    if (pCols.length === 0) {
-                      return <td key={phase.id} className="border-r-2 border-blue-100"></td>
-                    }
-                    return pCols.map((col) => (
-                      <GradeCell
-                        key={col.id}
-                        col={col}
-                        student={student}
-                        studentIdx={studentIdx}
-                        grades={grades}
-                        criterionGrades={criterionGrades}
-                        criteria={criteria.filter((c) => c.column_id === col.id)}
-                        onSave={saveGrade}
-                        onOpenQuickGrade={() => col.type === 'sumativa' && setQuickGradeCol(col)}
-                      />
-                    ))
+                  {periodCompetencies.map((pc) => {
+                    const meta = COMPETENCIES[pc.competency_key as CompetencyKey]
+                    const pcCols = columns.filter(c => c.competency_key === pc.competency_key)
+                    const compGrade = computeCompetencyGrade(
+                      student.id, pc.competency_key, columns, grades, criterionGrades, weights, bonusCap
+                    )
+
+                    return (
+                      <Fragment key={pc.id}>
+                        {pcCols.length === 0 ? (
+                          <td className="border-r border-gray-200"></td>
+                        ) : (
+                          pcCols.map((col) => {
+                            const colCriteria = criteria.filter((c) => c.column_id === col.id)
+                            return (
+                              <GradeCell
+                                key={col.id}
+                                col={col}
+                                student={student}
+                                studentIdx={studentIdx}
+                                grades={grades}
+                                criterionGrades={criterionGrades}
+                                criteria={colCriteria}
+                                onSave={saveGrade}
+                                onOpenQuickGrade={() => (col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0)) && setQuickGradeCol(col)}
+                              />
+                            )
+                          })
+                        )}
+                        <td className={`px-2 py-1 text-center border-r-2 ${meta.bgColor} ${meta.borderColor}`}>
+                          <span className={`text-sm font-bold ${compGrade !== null ? meta.textColor : 'text-gray-300'}`}>
+                            {compGrade !== null ? compGrade.toFixed(1) : '—'}
+                          </span>
+                        </td>
+                      </Fragment>
+                    )
                   })}
 
                   {bonusColumns.map((col) => {
@@ -560,52 +670,12 @@ export default function GradeTable({ course, period, students, initialGroups, on
               archivedStudents.map((s) => (
                 <div key={s.id} className="flex items-center gap-3 px-3 py-1.5 bg-gray-50 rounded-lg">
                   <span className="flex-1 text-sm text-gray-500">{s.name}</span>
-                  <button
-                    onClick={() => reactivateStudent(s)}
-                    className="text-xs text-blue-600 hover:text-blue-700 hover:underline"
-                  >
-                    Reactivar
-                  </button>
-                  <button
-                    onClick={() => deleteStudentPermanently(s)}
-                    className="text-xs text-red-500 hover:text-red-700 hover:underline"
-                  >
-                    Eliminar
-                  </button>
+                  <button onClick={() => reactivateStudent(s)} className="text-xs text-blue-600 hover:text-blue-700 hover:underline">Reactivar</button>
+                  <button onClick={() => deleteStudentPermanently(s)} className="text-xs text-red-500 hover:text-red-700 hover:underline">Eliminar</button>
                 </div>
               ))
             )}
           </div>
-        )}
-      </div>
-
-      {/* Add phase row */}
-      <div className="border-t border-gray-200 bg-gray-50 px-3 py-1.5">
-        {addingPhase === period.id ? (
-          <div className="flex items-center gap-2">
-            <input
-              autoFocus
-              value={newPhaseName}
-              onChange={(e) => setNewPhaseName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') addPhase(period.id)
-                if (e.key === 'Escape') setAddingPhase(null)
-              }}
-              placeholder="Nombre de la fase (ej: Empatizar y Definir)"
-              className="border rounded-lg px-3 py-1.5 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <button onClick={() => addPhase(period.id)} className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700">
-              Agregar fase
-            </button>
-            <button onClick={() => setAddingPhase(null)} className="text-sm text-gray-500">Cancelar</button>
-          </div>
-        ) : (
-          <button
-            onClick={() => setAddingPhase(period.id)}
-            className="text-sm text-blue-600 hover:text-blue-700"
-          >
-            + Agregar fase de Design Thinking
-          </button>
         )}
       </div>
 
@@ -624,12 +694,11 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
       {columnModal !== null && (
         <ColumnModal
-          phase={columnModal.phase}
+          competencyKey={columnModal.competencyKey ?? (columnModal.column?.competency_key as CompetencyKey | undefined)}
           column={columnModal.column}
           defaultType={columnModal.type}
           periodId={period.id}
           course={course}
-          phaseName={columnModal.phase?.name}
           onSave={onColumnSaved}
           onClose={() => setColumnModal(null)}
         />
@@ -641,7 +710,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
           course={course}
           period={period}
           columns={columns}
-          phases={phases}
+          phases={[]}
           grades={grades}
           criterionGrades={criterionGrades}
           criteria={criteria}
@@ -654,10 +723,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
         <ColorRangeConfig
           courseId={course.id}
           ranges={colorRanges}
-          onSave={(updated) => {
-            setColorRanges(updated)
-            setShowColorConfig(false)
-          }}
+          onSave={(updated) => { setColorRanges(updated); setShowColorConfig(false) }}
           onClose={() => setShowColorConfig(false)}
         />
       )}
@@ -708,6 +774,161 @@ export default function GradeTable({ course, period, students, initialGroups, on
   )
 }
 
+// ─── Competency Weight Badge ──────────────────────────────────────────────────
+
+function CompetencyWeightBadge({
+  pc,
+  weightPct,
+  onSave,
+}: {
+  pc: PeriodCompetency
+  weightPct: number
+  onSave: (w: number | null) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(weightPct.toString())
+  const isManual = pc.manual_weight !== null && pc.manual_weight !== undefined
+
+  if (editing) {
+    return (
+      <span className="inline-flex items-center gap-1 bg-white/80 rounded px-1" onClick={(e) => e.stopPropagation()}>
+        <input
+          autoFocus
+          type="number"
+          min={1}
+          max={99}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="w-10 text-xs border rounded px-1 py-0.5 text-center"
+        />
+        <span className="text-xs">%</span>
+        <button
+          onClick={() => {
+            const num = parseInt(value)
+            if (!isNaN(num) && num > 0) onSave(num / 100)
+            setEditing(false)
+          }}
+          className="text-xs text-blue-600"
+        >✓</button>
+        <button onClick={() => { onSave(null); setEditing(false) }} className="text-xs text-gray-400" title="Restablecer automático">↺</button>
+      </span>
+    )
+  }
+
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); setValue(weightPct.toString()); setEditing(true) }}
+      className={`text-xs px-1.5 py-0.5 rounded ${isManual ? 'bg-orange-100 text-orange-700' : 'bg-white/60 text-current opacity-70'}`}
+      title={isManual ? 'Peso manual — click para editar' : 'Peso automático (por sumativas) — click para ajustar'}
+    >
+      {weightPct}%{isManual ? ' ✎' : ''}
+    </button>
+  )
+}
+
+// ─── Copy Competency Button ───────────────────────────────────────────────────
+
+function CopyCompetencyButton({
+  periodId,
+  competencyKey,
+  yearId,
+  courseId,
+}: {
+  periodId: string
+  competencyKey: string
+  yearId: string
+  courseId: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [courses, setCourses] = useState<{ id: string; name: string }[]>([])
+  const [loading, setLoading] = useState(false)
+  const [results, setResults] = useState<Record<string, string>>({})
+  const [copying, setCopying] = useState<string | null>(null)
+
+  async function openMenu() {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/courses?yearId=${yearId}`)
+      const data = await res.json()
+      setCourses((data ?? []).filter((c: { id: string }) => c.id !== courseId))
+      setResults({})
+      setOpen(true)
+    } catch {
+      alert('No se pudo cargar la lista de cursos.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function copyTo(targetId: string) {
+    setCopying(targetId)
+    try {
+      const res = await fetch(`/api/courses/${targetId}/duplicate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourcePeriodId: periodId, competencyKey }),
+      })
+      const data = await res.json()
+      setResults((prev) => ({ ...prev, [targetId]: res.ok ? `✓ ${data.columnsAdded} eval.` : '✗ Error' }))
+    } catch {
+      setResults((prev) => ({ ...prev, [targetId]: '✗ Sin conexión' }))
+    } finally {
+      setCopying(null)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={openMenu}
+        disabled={loading}
+        title="Copiar evaluaciones de esta competencia a otro curso"
+        className="opacity-60 hover:opacity-100 text-xs px-1"
+      >
+        {loading ? '…' : '⧉'}
+      </button>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-sm font-bold mb-1">Copiar evaluaciones a otro curso</h2>
+        <p className="text-xs text-gray-500 mb-3">Solo copia la estructura, no las notas.</p>
+        {courses.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-3">No hay otros cursos en este año.</p>
+        ) : (
+          <div className="space-y-2">
+            {courses.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-gray-700 flex-1">{c.name}</span>
+                {results[c.id] ? (
+                  <span className={`text-xs font-medium ${results[c.id].startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>
+                    {results[c.id]}
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => copyTo(c.id)}
+                    disabled={copying === c.id}
+                    className="text-xs px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {copying === c.id ? '…' : 'Copiar'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <button onClick={() => setOpen(false)} className="mt-4 w-full py-2 border border-gray-300 rounded-xl text-sm hover:bg-gray-50">
+          Cerrar
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Column Header ────────────────────────────────────────────────────────────
+
 function ColumnHeader({
   col,
   criteria,
@@ -756,12 +977,16 @@ function ColumnHeader({
           </div>
         </div>
         <span className={`text-xs px-1 rounded ${typeColor} opacity-70`}>
-          {col.type === 'formativa' ? 'Form.' : col.type === 'sumativa' ? `Sum. (${criteria.length}crit.)` : 'Bonus'}
+          {col.type === 'formativa'
+            ? criteria.length > 0 ? `Form. (${criteria.length}crit.)` : 'Form.'
+            : col.type === 'sumativa' ? `Sum. (${criteria.length}crit.)` : 'Bonus'}
         </span>
       </div>
     </th>
   )
 }
+
+// ─── Grade Cell ───────────────────────────────────────────────────────────────
 
 function GradeCell({
   col,
@@ -792,17 +1017,18 @@ function GradeCell({
     setValue(newScore !== null ? newScore.toString() : '')
   }, [grades, criterionGrades])
 
-  const disabled = col.type === 'sumativa' || !col.description
+  const hasCriteria = criteria.length > 0
+  const disabled = (col.type === 'sumativa' || (col.type === 'formativa' && hasCriteria)) || !col.description
 
-  if (col.type === 'sumativa') {
+  if (col.type === 'sumativa' || (col.type === 'formativa' && hasCriteria)) {
     return (
       <td
-        className="px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-blue-50"
+        className="px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50"
         onClick={onOpenQuickGrade}
-        title={criteria.length === 0 ? 'Definir criterios primero' : 'Click para calificar por criterios'}
+        title={hasCriteria ? 'Click para calificar por rúbrica' : 'Definir criterios primero'}
       >
         <span className={`text-sm ${score !== null ? 'text-gray-800 font-medium' : 'text-gray-300'}`}>
-          {score !== null ? score.toFixed(1) : criteria.length === 0 ? '—' : '·'}
+          {score !== null ? score.toFixed(1) : hasCriteria ? '·' : '—'}
         </span>
         {grade?.is_manually_adjusted && (
           <span className="ml-0.5 text-xs text-orange-500" title="Nota ajustada individualmente">*</span>
@@ -817,16 +1043,8 @@ function GradeCell({
     )
     const idx = allInputs.indexOf(currentInput)
     if (idx === -1) return
-
-    if (direction === 'right') {
-      allInputs[idx + 1]?.focus()
-      return
-    }
-
-    // 'down': find same column index, next row
-    const colIdx = allInputs
-      .slice(0, idx + 1)
-      .filter((el) => el.dataset.colId === currentInput.dataset.colId).length - 1
+    if (direction === 'right') { allInputs[idx + 1]?.focus(); return }
+    const colIdx = allInputs.slice(0, idx + 1).filter((el) => el.dataset.colId === currentInput.dataset.colId).length - 1
     const sameCol = allInputs.filter((el) => el.dataset.colId === currentInput.dataset.colId)
     sameCol[colIdx + 1]?.focus()
   }
@@ -842,10 +1060,7 @@ function GradeCell({
       return
     }
     const num = parseFloat(trimmed)
-    if (isNaN(num) || num < 0 || num > 10) {
-      setValue(score !== null ? score.toString() : '')
-      return
-    }
+    if (isNaN(num) || num < 0 || num > 10) { setValue(score !== null ? score.toString() : ''); return }
     const clamped = Math.round(Math.min(10, Math.max(0, num)) * 10) / 10
     setSaving(true)
     setValue(clamped.toString())
@@ -891,6 +1106,8 @@ function GradeCell({
   )
 }
 
+// ─── Weights Editor ───────────────────────────────────────────────────────────
+
 function WeightsEditor({
   weights,
   bonusCap,
@@ -930,101 +1147,6 @@ function WeightsEditor({
       <input type="number" value={bc} onChange={(e) => setBc(Number(e.target.value))} className="w-12 border rounded px-1 py-0.5 text-sm" />
       <button onClick={save} className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700">OK</button>
       <button onClick={() => setOpen(false)} className="text-xs text-gray-400">✕</button>
-    </div>
-  )
-}
-
-function CopyPhaseButton({
-  phaseId,
-  phaseName,
-  courseId,
-  yearId,
-  onDone,
-}: {
-  phaseId: string
-  phaseName: string
-  courseId: string
-  yearId: string
-  onDone: () => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [courses, setCourses] = useState<{ id: string; name: string }[]>([])
-  const [loading, setLoading] = useState(false)
-  const [copying, setCopying] = useState<string | null>(null)
-  const [results, setResults] = useState<Record<string, string>>({})
-
-  async function openMenu() {
-    setLoading(true)
-    const data = await fetch(`/api/courses?yearId=${yearId}`).then((r) => r.json())
-    setCourses((data ?? []).filter((c: { id: string }) => c.id !== courseId))
-    setResults({})
-    setOpen(true)
-    setLoading(false)
-  }
-
-  async function copyTo(targetId: string, targetName: string) {
-    setCopying(targetId)
-    const res = await fetch(`/api/courses/${targetId}/duplicate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phaseId }),
-    })
-    const data = await res.json()
-    setCopying(null)
-    if (res.ok) {
-      setResults((prev) => ({ ...prev, [targetId]: `✓ ${data.columnsAdded} col.` }))
-      onDone()
-    } else {
-      setResults((prev) => ({ ...prev, [targetId]: '✗ Error' }))
-    }
-  }
-
-  if (!open) {
-    return (
-      <button
-        onClick={openMenu}
-        disabled={loading}
-        title={`Copiar fase "${phaseName}" a otro curso`}
-        className="text-blue-300 hover:text-blue-500 text-xs px-0.5"
-      >
-        {loading ? '…' : '⧉'}
-      </button>
-    )
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-5" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-sm font-bold mb-1">Copiar fase "{phaseName}"</h2>
-        <p className="text-xs text-gray-500 mb-3">Selecciona el curso destino. No copia notas.</p>
-        {courses.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-3">No hay otros cursos en este año.</p>
-        ) : (
-          <div className="space-y-2">
-            {courses.map((c) => (
-              <div key={c.id} className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium text-gray-700 flex-1">{c.name}</span>
-                {results[c.id] ? (
-                  <span className={`text-xs font-medium ${results[c.id].startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>
-                    {results[c.id]}
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => copyTo(c.id, c.name)}
-                    disabled={copying === c.id}
-                    className="text-xs px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex-shrink-0"
-                  >
-                    {copying === c.id ? '…' : 'Copiar'}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        <button onClick={() => setOpen(false)} className="mt-4 w-full py-2 border border-gray-300 rounded-xl text-sm hover:bg-gray-50">
-          Cerrar
-        </button>
-      </div>
     </div>
   )
 }

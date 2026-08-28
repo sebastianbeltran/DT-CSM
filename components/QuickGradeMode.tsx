@@ -74,6 +74,14 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
 
   }
 
+  function getFirstInvalidCriterionIdx(): number {
+    const studentScores = scores[currentStudent?.id] ?? {}
+    return criteria.findIndex((c) => {
+      const v = parseFloat(studentScores[c.id] ?? '0')
+      return !isNaN(v) && v > c.max_score
+    })
+  }
+
   function handleKeyDown(e: React.KeyboardEvent, criterionIdx: number) {
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
@@ -81,9 +89,16 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
       if (nextCritIdx < criteria.length) {
         inputRefs.current[nextCritIdx]?.focus()
       } else {
+        // Validate before advancing
+        const invalidIdx = getFirstInvalidCriterionIdx()
+        if (invalidIdx !== -1) {
+          inputRefs.current[invalidIdx]?.focus()
+          inputRefs.current[invalidIdx]?.select()
+          return
+        }
         const studentId = currentStudent.id
-        saveCurrentStudent(studentId).then(() => {
-          if (currentStudentIdx < students.length - 1) {
+        saveCurrentStudent(studentId).then((ok) => {
+          if (ok && currentStudentIdx < students.length - 1) {
             setCurrentStudentIdx((i) => i + 1)
           }
         })
@@ -92,53 +107,68 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
     if (e.key === 'Escape') onClose()
   }
 
-  async function saveCurrentStudent(studentId: string): Promise<void> {
+  async function saveCurrentStudent(studentId: string): Promise<boolean> {
     setSaving(true)
     const studentScores = scores[studentId] ?? {}
 
-    // Validate scores
-    for (const c of criteria) {
+    const invalidIdx = criteria.findIndex((c) => {
       const v = parseFloat(studentScores[c.id] ?? '0')
-      if (v > c.max_score) {
-        alert(`El puntaje de "${c.name}" no puede superar ${c.max_score}`)
-        setSaving(false)
-        return
-      }
+      return !isNaN(v) && v > c.max_score
+    })
+    if (invalidIdx !== -1) {
+      inputRefs.current[invalidIdx]?.focus()
+      inputRefs.current[invalidIdx]?.select()
+      setSaving(false)
+      return false
     }
 
-    // Upsert grade
-    const gradeRes = await fetch('/api/grades', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: studentId, column_id: column.id, score: getTotal(studentId) }),
-    })
-    const gradeData = await gradeRes.json()
-
-    if (gradeData.id) {
-      const criterionGradesData = criteria.map((c) => ({
-        criterion_id: c.id,
-        score: parseFloat(studentScores[c.id] ?? '0') || 0,
-      }))
-
-      await fetch('/api/grades/bulk', {
+    try {
+      const gradeRes = await fetch('/api/grades', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grade_id: gradeData.id, criterion_grades: criterionGradesData }),
+        body: JSON.stringify({ student_id: studentId, column_id: column.id, score: getTotal(studentId) }),
       })
+      if (gradeRes.redirected || gradeRes.url.includes('/login')) {
+        alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
+        return false
+      }
+      if (!gradeRes.ok) {
+        alert('Error al guardar la nota. Verifica tu conexión.')
+        return false
+      }
+      const gradeData = await gradeRes.json()
 
-      setSaved((prev) => new Set<string>([...Array.from(prev), studentId]))
-      onSave(
-        [gradeData],
-        criteria.map((c, i) => ({
-          id: '',
-          grade_id: gradeData.id,
+      if (gradeData.id) {
+        const criterionGradesData = criteria.map((c) => ({
           criterion_id: c.id,
-          score: criterionGradesData[i].score,
-          created_at: '',
+          score: parseFloat(studentScores[c.id] ?? '0') || 0,
         }))
-      )
+
+        await fetch('/api/grades/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ grade_id: gradeData.id, criterion_grades: criterionGradesData }),
+        })
+
+        setSaved((prev) => new Set<string>([...Array.from(prev), studentId]))
+        onSave(
+          [gradeData],
+          criteria.map((c, i) => ({
+            id: '',
+            grade_id: gradeData.id,
+            criterion_id: c.id,
+            score: criterionGradesData[i].score,
+            created_at: '',
+          }))
+        )
+      }
+      return true
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+      return false
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
   }
 
   async function saveAll() {
@@ -196,7 +226,15 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
         </div>
         <div className="p-4 border-t border-gray-700 space-y-2">
           <button
-            onClick={() => saveCurrentStudent(currentStudent.id)}
+            onClick={() => {
+              const invalidIdx = getFirstInvalidCriterionIdx()
+              if (invalidIdx !== -1) {
+                inputRefs.current[invalidIdx]?.focus()
+                inputRefs.current[invalidIdx]?.select()
+                return
+              }
+              saveCurrentStudent(currentStudent.id)
+            }}
             disabled={saving}
             className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
           >
@@ -291,8 +329,8 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
             ← Anterior
           </button>
           <button
-            onClick={() => saveCurrentStudent(currentStudent.id).then(() => {
-              if (currentStudentIdx < students.length - 1) setCurrentStudentIdx((i) => i + 1)
+            onClick={() => saveCurrentStudent(currentStudent.id).then((ok) => {
+              if (ok && currentStudentIdx < students.length - 1) setCurrentStudentIdx((i) => i + 1)
             })}
             disabled={saving}
             className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"

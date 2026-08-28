@@ -44,11 +44,23 @@ export interface Phase {
   created_at: string
 }
 
+export interface PeriodCompetency {
+  id: string
+  period_id: string
+  competency_key: 'CTP' | 'CC' | 'CTT'
+  learning_objective: string
+  contents?: string
+  manual_weight?: number | null
+  sort_order: number
+  created_at: string
+}
+
 export type GradeColumnType = 'formativa' | 'sumativa' | 'bonus'
 
 export interface GradeColumn {
   id: string
   phase_id?: string
+  competency_key?: 'CTP' | 'CC' | 'CTT' | null
   period_id?: string
   name: string
   description?: string
@@ -136,13 +148,6 @@ export interface Report {
   generated_at: string
   updated_at: string
 }
-
-export const DEFAULT_PHASES = [
-  'Empatizar y Definir',
-  'Idear',
-  'Prototipar',
-  'Testear',
-]
 
 export const DEFAULT_COLOR_RANGES: Omit<ColorRange, 'id' | 'course_id' | 'period_id'>[] = [
   { label: 'En riesgo', min_score: 0, max_score: 6.49, color: '#fca5a5', sort_order: 0 },
