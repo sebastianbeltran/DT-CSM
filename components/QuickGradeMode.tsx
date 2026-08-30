@@ -1,8 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import type { GradeColumn, Criterion, Student, Grade, CriterionGrade } from '@/lib/types'
-import { computeCriteriaTotal } from '@/lib/calculations'
+import { useState, useEffect, useRef } from 'react'
+import type { GradeColumn, Criterion, CriterionLevel, Student, Grade, CriterionGrade } from '@/lib/types'
 
 interface Props {
   column: GradeColumn
@@ -24,9 +23,23 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState<Set<string>>(new Set())
   const inputRefs = useRef<(HTMLInputElement | null)[]>([])
+  const panelRef = useRef<HTMLDivElement>(null)
+  const criterionRefs = useRef<(HTMLDivElement | null)[]>([])
+
+  // Keyboard navigation state for levels-based criteria
+  const [activeCriterionIdx, setActiveCriterionIdx] = useState(0)
+  const [hoveredLevelIdx, setHoveredLevelIdx] = useState(0)
+  const [inRangeMode, setInRangeMode] = useState(false)
+  const [rangeStepIdx, setRangeStepIdx] = useState(0)
+
+  // Auto-composed feedback per student
+  const [feedbacks, setFeedbacks] = useState<Record<string, string>>({})
 
   useEffect(() => {
-    // Initialize scores from existing grades
+    criterionRefs.current[activeCriterionIdx]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [activeCriterionIdx])
+
+  useEffect(() => {
     const initial: StudentScores = {}
     for (const student of students) {
       initial[student.id] = {}
@@ -46,11 +59,33 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
   }, [])
 
   useEffect(() => {
-    // Focus first criterion of current student
-    inputRefs.current[0]?.focus()
+    setActiveCriterionIdx(0)
+    setHoveredLevelIdx(0)
+    setInRangeMode(false)
+    if (criteria[0]?.levels?.length) {
+      setTimeout(() => panelRef.current?.focus(), 50)
+    } else {
+      setTimeout(() => inputRefs.current[0]?.focus(), 50)
+    }
   }, [currentStudentIdx])
 
   const currentStudent = students[currentStudentIdx]
+
+  function parseLevelPoints(points: number | string): number[] {
+    if (typeof points === 'number') return [points]
+    const parts = String(points).split('-').map(Number)
+    if (parts.length !== 2 || parts.some(isNaN)) return []
+    const [min, max] = parts
+    const steps: number[] = []
+    for (let v = min; v <= max + 0.001; v += 0.5) steps.push(Math.round(v * 10) / 10)
+    return steps
+  }
+
+  function isLevelSelected(level: CriterionLevel, val: string): boolean {
+    const num = parseFloat(val)
+    if (isNaN(num)) return false
+    return parseLevelPoints(level.points).includes(num)
+  }
 
   function getTotal(studentId: string): number {
     if (!scores[studentId]) return 0
@@ -62,16 +97,98 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
 
   function handleChange(criterionIdx: number, value: string, criterion: Criterion) {
     const studentId = currentStudent.id
-    const num = parseFloat(value)
-
     setScores((prev) => ({
       ...prev,
-      [studentId]: {
-        ...prev[studentId],
-        [criterion.id]: value,
-      },
+      [studentId]: { ...prev[studentId], [criterion.id]: value },
     }))
+  }
 
+  function composeFeedback(studentId: string): string {
+    const studentScores = scores[studentId] ?? {}
+    const lines = criteria
+      .filter((c) => c.levels?.length)
+      .map((c) => {
+        const val = studentScores[c.id] ?? ''
+        const num = parseFloat(val)
+        const selected = c.levels!.find((l) => isLevelSelected(l, val))
+        if (!selected) return null
+        return `• ${c.name} (${isNaN(num) ? '—' : num}/${c.max_score} — ${selected.label}): ${selected.description}.`
+      })
+      .filter(Boolean)
+    return lines.join('\n')
+  }
+
+  function advanceCriterion(fromIdx: number) {
+    const nextIdx = fromIdx + 1
+    if (nextIdx < criteria.length) {
+      setActiveCriterionIdx(nextIdx)
+      setHoveredLevelIdx(0)
+      setInRangeMode(false)
+      if (!criteria[nextIdx].levels?.length) {
+        setTimeout(() => inputRefs.current[nextIdx]?.focus(), 0)
+      } else {
+        panelRef.current?.focus()
+      }
+    } else {
+      saveCurrentStudent(currentStudent.id).then((ok) => {
+        if (ok && currentStudentIdx < students.length - 1) {
+          setCurrentStudentIdx((i) => i + 1)
+        }
+      })
+    }
+  }
+
+  function handlePanelKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') { onClose(); return }
+
+    const criterion = criteria[activeCriterionIdx]
+    if (!criterion) return
+
+    if (!criterion.levels?.length) {
+      inputRefs.current[activeCriterionIdx]?.focus()
+      return
+    }
+
+    if (inRangeMode) {
+      const level = criterion.levels[hoveredLevelIdx]
+      const steps = parseLevelPoints(level.points)
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        const next = Math.min(rangeStepIdx + 1, steps.length - 1)
+        setRangeStepIdx(next)
+        handleChange(activeCriterionIdx, String(steps[next]), criterion)
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const prev = Math.max(rangeStepIdx - 1, 0)
+        setRangeStepIdx(prev)
+        handleChange(activeCriterionIdx, String(steps[prev]), criterion)
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        setInRangeMode(false)
+        advanceCriterion(activeCriterionIdx)
+      }
+      return
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHoveredLevelIdx((i) => Math.min(i + 1, criterion.levels!.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHoveredLevelIdx((i) => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const level = criterion.levels[hoveredLevelIdx]
+      const steps = parseLevelPoints(level.points)
+      if (steps.length > 1) {
+        handleChange(activeCriterionIdx, String(steps[0]), criterion)
+        setRangeStepIdx(0)
+        setInRangeMode(true)
+      } else {
+        handleChange(activeCriterionIdx, String(steps[0]), criterion)
+        advanceCriterion(activeCriterionIdx)
+      }
+    }
   }
 
   function getFirstInvalidCriterionIdx(): number {
@@ -87,20 +204,23 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
       e.preventDefault()
       const nextCritIdx = criterionIdx + 1
       if (nextCritIdx < criteria.length) {
-        inputRefs.current[nextCritIdx]?.focus()
+        if (criteria[nextCritIdx].levels?.length) {
+          setActiveCriterionIdx(nextCritIdx)
+          setHoveredLevelIdx(0)
+          setInRangeMode(false)
+          setTimeout(() => panelRef.current?.focus(), 0)
+        } else {
+          inputRefs.current[nextCritIdx]?.focus()
+        }
       } else {
-        // Validate before advancing
         const invalidIdx = getFirstInvalidCriterionIdx()
         if (invalidIdx !== -1) {
           inputRefs.current[invalidIdx]?.focus()
           inputRefs.current[invalidIdx]?.select()
           return
         }
-        const studentId = currentStudent.id
-        saveCurrentStudent(studentId).then((ok) => {
-          if (ok && currentStudentIdx < students.length - 1) {
-            setCurrentStudentIdx((i) => i + 1)
-          }
+        saveCurrentStudent(currentStudent.id).then((ok) => {
+          if (ok && currentStudentIdx < students.length - 1) setCurrentStudentIdx((i) => i + 1)
         })
       }
     }
@@ -151,6 +271,11 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
         })
 
         setSaved((prev) => new Set<string>([...Array.from(prev), studentId]))
+
+        // Auto-compose feedback from selected level descriptions
+        const fb = composeFeedback(studentId)
+        if (fb) setFeedbacks((prev) => ({ ...prev, [studentId]: fb }))
+
         onSave(
           [gradeData],
           criteria.map((c, i) => ({
@@ -195,6 +320,8 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
     )
   }
 
+  const hasLevelsCriteria = criteria.some((c) => c.levels?.length)
+
   return (
     <div className="fixed inset-0 bg-gray-900 z-50 flex">
       {/* Left: student list */}
@@ -202,6 +329,9 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
         <div className="p-4 border-b border-gray-700">
           <h2 className="text-white font-bold text-lg">{column.name}</h2>
           <p className="text-gray-400 text-sm mt-1">Calificación por criterios</p>
+          {hasLevelsCriteria && (
+            <p className="text-gray-500 text-xs mt-1">↑↓ navegar niveles · Enter confirmar</p>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto">
           {students.map((s, idx) => {
@@ -254,7 +384,12 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
       </div>
 
       {/* Right: criteria grading panel */}
-      <div className="flex-1 flex flex-col bg-white">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        onKeyDown={handlePanelKeyDown}
+        className="flex-1 flex flex-col bg-white outline-none"
+      >
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <div>
             <h3 className="text-xl font-bold text-gray-900">{currentStudent?.name}</h3>
@@ -280,11 +415,129 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
           {criteria.map((criterion, idx) => {
             const val = scores[currentStudent?.id]?.[criterion.id] ?? ''
             const num = parseFloat(val)
+            const hasLevels = !!(criterion.levels?.length)
+            const isActive = activeCriterionIdx === idx
+
+            if (hasLevels) {
+              return (
+                <div
+                  key={criterion.id}
+                  ref={(el) => { criterionRefs.current[idx] = el }}
+                  className={`rounded-xl p-4 border-2 transition-colors cursor-default ${
+                    isActive ? 'border-blue-400 bg-blue-50/30' : 'border-transparent bg-gray-50'
+                  }`}
+                  onClick={() => {
+                    setActiveCriterionIdx(idx)
+                    setHoveredLevelIdx(0)
+                    setInRangeMode(false)
+                    panelRef.current?.focus()
+                  }}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="font-medium text-gray-800">{criterion.name}</label>
+                    <div className="flex items-center gap-2">
+                      {isActive && !inRangeMode && (
+                        <span className="text-xs text-blue-500 font-medium">↑↓ · Enter</span>
+                      )}
+                      {isActive && inRangeMode && (
+                        <span className="text-xs text-amber-600 font-medium">←→ valor exacto · Enter</span>
+                      )}
+                      <span className="text-sm text-gray-500">
+                        {isNaN(num) ? '—' : num} / {criterion.max_score} pts
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {criterion.levels!.map((level, levelIdx) => {
+                      const selected = isLevelSelected(level, val)
+                      const hovered = isActive && !inRangeMode && hoveredLevelIdx === levelIdx
+                      const steps = parseLevelPoints(level.points)
+                      const isRange = steps.length > 1
+
+                      return (
+                        <div key={levelIdx}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setActiveCriterionIdx(idx)
+                              setHoveredLevelIdx(levelIdx)
+                              if (isRange) {
+                                handleChange(idx, String(steps[0]), criterion)
+                                setRangeStepIdx(0)
+                                setInRangeMode(true)
+                              } else {
+                                handleChange(idx, String(steps[0]), criterion)
+                                setInRangeMode(false)
+                              }
+                              panelRef.current?.focus()
+                            }}
+                            className={`w-full text-left px-4 py-3 rounded-xl border-2 transition-colors ${
+                              selected && hovered
+                                ? 'border-blue-500 bg-blue-50 ring-2 ring-amber-400'
+                                : selected
+                                ? 'border-blue-500 bg-blue-50'
+                                : hovered
+                                ? 'border-amber-400 bg-amber-50'
+                                : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <span className={`font-semibold text-sm ${selected || hovered ? 'text-gray-900' : 'text-gray-700'}`}>
+                                  {level.label}
+                                </span>
+                                <p className="text-xs text-gray-500 mt-0.5 leading-snug">{level.description}</p>
+                              </div>
+                              <span className={`font-bold text-sm whitespace-nowrap mt-0.5 ${
+                                selected ? 'text-blue-700' : hovered ? 'text-amber-700' : 'text-gray-400'
+                              }`}>
+                                {level.points} pts
+                              </span>
+                            </div>
+                          </button>
+
+                          {isRange && selected && (
+                            <div className="flex items-center gap-1.5 mt-1.5 ml-4">
+                              <span className="text-xs text-gray-500">Exacto:</span>
+                              {steps.map((v) => (
+                                <button
+                                  key={v}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleChange(idx, String(v), criterion)
+                                    panelRef.current?.focus()
+                                  }}
+                                  className={`px-2.5 py-1 rounded-lg text-sm font-bold border-2 transition-colors ${
+                                    num === v
+                                      ? 'border-blue-500 bg-blue-100 text-blue-700'
+                                      : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                                  }`}
+                                >
+                                  {v}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            }
+
+            // Simple numeric input (criteria without levels)
             const isOver = !isNaN(num) && num > criterion.max_score
             const isInvalid = !isNaN(num) && (num < 0 || num > criterion.max_score)
 
             return (
-              <div key={criterion.id} className="bg-gray-50 rounded-xl p-4">
+              <div
+                key={criterion.id}
+                ref={(el) => { criterionRefs.current[idx] = el }}
+                className={`rounded-xl p-4 border-2 transition-colors ${
+                  isActive ? 'border-blue-300 bg-blue-50/20' : 'border-transparent bg-gray-50'
+                }`}
+              >
                 <div className="flex items-center justify-between mb-2">
                   <label className="font-medium text-gray-800">{criterion.name}</label>
                   <span className="text-sm text-gray-500">Máx. {criterion.max_score}</span>
@@ -297,8 +550,12 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
                     max={criterion.max_score}
                     step={0.5}
                     value={val}
-                    onChange={(e) => handleChange(idx, e.target.value, criterion)}
-                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => {
+                      setActiveCriterionIdx(idx)
+                      handleChange(idx, e.target.value, criterion)
+                    }}
+                    onFocus={() => setActiveCriterionIdx(idx)}
+                    onSelect={(e) => (e.target as HTMLInputElement).select()}
                     onKeyDown={(e) => handleKeyDown(e, idx)}
                     className={`w-24 text-center text-xl font-bold border-2 rounded-xl py-3 focus:outline-none focus:ring-2 transition-colors ${
                       isInvalid
@@ -318,6 +575,27 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
               </div>
             )
           })}
+
+          {/* Retroalimentación — aparece automáticamente al guardar */}
+          {feedbacks[currentStudent?.id] && (
+            <div className="border border-gray-200 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-gray-700">Retroalimentación</span>
+                <button
+                  onClick={() => navigator.clipboard.writeText(feedbacks[currentStudent.id])}
+                  className="text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-2 py-0.5"
+                >
+                  Copiar
+                </button>
+              </div>
+              <textarea
+                value={feedbacks[currentStudent.id]}
+                onChange={(e) => setFeedbacks((prev) => ({ ...prev, [currentStudent.id]: e.target.value }))}
+                rows={criteria.filter((c) => c.levels?.length).length + 1}
+                className="w-full text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none leading-relaxed"
+              />
+            </div>
+          )}
         </div>
 
         <div className="p-6 border-t border-gray-200 flex items-center justify-between">

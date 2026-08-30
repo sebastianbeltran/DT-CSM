@@ -53,10 +53,11 @@ export async function POST(req: Request) {
     return NextResponse.json([])
   }
 
-  const toInsert = criteria.map((c: { name: string; max_score: number }, i: number) => ({
+  const toInsert = criteria.map((c: { name: string; max_score: number; levels?: unknown }, i: number) => ({
     column_id,
     name: c.name,
     max_score: c.max_score,
+    levels: c.levels ?? null,
     sort_order: i,
   }))
 

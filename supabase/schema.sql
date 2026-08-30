@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS criteria (
   column_id UUID NOT NULL REFERENCES grade_columns(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   max_score NUMERIC(4,1) NOT NULL,
+  levels JSONB,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

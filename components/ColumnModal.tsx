@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { GradeColumn, Criterion, Course } from '@/lib/types'
+import type { GradeColumn, Criterion, CriterionLevel, Course } from '@/lib/types'
 import type { CompetencyKey } from '@/lib/competencies'
 import { COMPETENCIES } from '@/lib/competencies'
 
@@ -19,6 +19,7 @@ interface CriterionDraft {
   id?: string
   name: string
   max_score: number
+  levels?: CriterionLevel[]
 }
 
 export default function ColumnModal({ competencyKey, column, defaultType, periodId, course, onSave, onClose }: Props) {
@@ -36,6 +37,9 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
   const [saving, setSaving] = useState(false)
   const [bonusWithCriteria, setBonusWithCriteria] = useState(false)
   const [formativaWithCriteria, setFormativaWithCriteria] = useState(false)
+  const [showJsonImport, setShowJsonImport] = useState(false)
+  const [jsonInput, setJsonInput] = useState('')
+  const [jsonError, setJsonError] = useState('')
 
   const effectiveCompetencyKey = competencyKey ?? (column?.competency_key as CompetencyKey | undefined)
   const competency = effectiveCompetencyKey ? COMPETENCIES[effectiveCompetencyKey] : null
@@ -47,7 +51,7 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
       fetch(`/api/criteria?columnId=${column.id}`)
         .then((r) => r.json())
         .then((data) => {
-          setCriteria(data.map((c: Criterion) => ({ id: c.id, name: c.name, max_score: c.max_score })))
+          setCriteria(data.map((c: Criterion) => ({ id: c.id, name: c.name, max_score: c.max_score, levels: c.levels })))
           if (column.type === 'bonus' && data.length > 0) setBonusWithCriteria(true)
           if (column.type === 'formativa' && data.length > 0) setFormativaWithCriteria(true)
           setLoadingCriteria(false)
@@ -100,6 +104,43 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
       alert('No se pudo conectar con la IA. Verifica que ANTHROPIC_API_KEY esté configurada.')
     }
     setAiLoading(false)
+  }
+
+  function importFromJson() {
+    setJsonError('')
+    try {
+      const parsed = JSON.parse(jsonInput)
+      const raw: unknown[] = Array.isArray(parsed) ? parsed : parsed?.criteria
+      if (!Array.isArray(raw) || raw.length === 0) {
+        setJsonError('El JSON debe tener un array "criteria" con al menos un criterio.')
+        return
+      }
+      const imported: CriterionDraft[] = raw.map((c: unknown) => {
+        const item = c as Record<string, unknown>
+        return {
+          name: String(item.name ?? ''),
+          max_score: Number(item.points_available ?? item.max_score ?? 0),
+          levels: Array.isArray(item.levels) ? (item.levels as CriterionLevel[]) : undefined,
+        }
+      })
+      if (imported.some((c) => !c.name.trim() || !c.max_score)) {
+        setJsonError('Cada criterio debe tener "name" y "points_available" (o "max_score").')
+        return
+      }
+      if (type === 'sumativa') {
+        const total = imported.reduce((s, c) => s + c.max_score, 0)
+        if (Math.abs(total - 10) > 0.01) {
+          setJsonError(`Los puntajes deben sumar 10.0 para sumativa (actualmente: ${total.toFixed(1)}).`)
+          return
+        }
+      }
+      if (criteria.length > 0 && !confirm('¿Reemplazar los criterios actuales con los del JSON?')) return
+      setCriteria(imported)
+      setShowJsonImport(false)
+      setJsonInput('')
+    } catch {
+      setJsonError('JSON inválido. Verifica el formato e intenta de nuevo.')
+    }
   }
 
   const criteriaTotal = criteria.reduce((sum, c) => sum + Number(c.max_score), 0)
@@ -317,6 +358,12 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
                 </div>
                 <div className="flex gap-2">
                   <button
+                    onClick={() => { setShowJsonImport((v) => !v); setJsonError('') }}
+                    className="text-xs text-purple-600 hover:text-purple-700"
+                  >
+                    📥 Importar rúbrica
+                  </button>
+                  <button
                     onClick={() => setCriteria((prev) => [...prev, { name: '', max_score: 1 }])}
                     className="text-xs text-blue-600 hover:text-blue-700"
                   >
@@ -332,6 +379,36 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
                 </div>
               </div>
 
+              {showJsonImport && (
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-2">
+                  <p className="text-xs text-purple-700 mb-2 font-medium">
+                    Pega el JSON de la rúbrica detallada (con niveles por criterio):
+                  </p>
+                  <textarea
+                    value={jsonInput}
+                    onChange={(e) => { setJsonInput(e.target.value); setJsonError('') }}
+                    rows={5}
+                    placeholder={'{\n  "criteria": [\n    { "name": "...", "points_available": 3, "levels": [...] }\n  ]\n}'}
+                    className="w-full border rounded-lg px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-purple-500 bg-white"
+                  />
+                  {jsonError && <p className="text-xs text-red-600 mt-1">{jsonError}</p>}
+                  <div className="flex gap-2 mt-2 justify-end">
+                    <button
+                      onClick={() => { setShowJsonImport(false); setJsonInput(''); setJsonError('') }}
+                      className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={importFromJson}
+                      className="text-xs bg-purple-600 text-white px-3 py-1 rounded-lg hover:bg-purple-700"
+                    >
+                      Importar
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {loadingCriteria ? (
                 <div className="text-sm text-gray-400">Cargando criterios...</div>
               ) : (
@@ -346,6 +423,11 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
                         placeholder="Nombre del criterio"
                         className="flex-1 border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
+                      {c.levels && c.levels.length > 0 && (
+                        <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium whitespace-nowrap">
+                          {c.levels.length} niveles
+                        </span>
+                      )}
                       <div className="flex items-center gap-1">
                         <span className="text-xs text-gray-500">Máx:</span>
                         <input

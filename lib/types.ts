@@ -71,6 +71,12 @@ export interface GradeColumn {
   created_at: string
 }
 
+export interface CriterionLevel {
+  label: string
+  points: number | string
+  description: string
+}
+
 export interface Criterion {
   id: string
   column_id: string
@@ -78,6 +84,7 @@ export interface Criterion {
   max_score: number
   sort_order: number
   created_at: string
+  levels?: CriterionLevel[]
 }
 
 export interface Grade {
