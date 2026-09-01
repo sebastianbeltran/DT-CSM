@@ -7,7 +7,8 @@ import type { CompetencyKey } from '@/lib/competencies'
 import { COMPETENCIES } from '@/lib/competencies'
 import {
   computePeriodFinalFromCompetencies,
-  computeCompetencyGrade,
+  computeCompetencyGradesWithBonus,
+  getBonusRecipientKey,
   getStudentScore,
   getColorForGrade,
 } from '@/lib/calculations'
@@ -59,7 +60,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [showArchived, setShowArchived] = useState(false)
 
   const [weights, setWeights] = useState(period.grade_weights ?? course.grade_weights ?? { formativa: 40, sumativa: 60 })
-  const [bonusCap, setBonusCap] = useState(period.bonus_cap ?? course.bonus_cap ?? 10)
+  const [bonusCap, setBonusCap] = useState(period.bonus_cap ?? course.bonus_cap ?? 1)
   const [localStudents, setLocalStudents] = useState(students)
   const [archivedStudents, setArchivedStudents] = useState<Student[]>([])
   const [loadingArchived, setLoadingArchived] = useState(false)
@@ -267,6 +268,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   }
 
   const bonusColumns = columns.filter((c) => c.type === 'bonus' && !c.competency_key)
+  const entregaColumns = columns.filter((c) => c.type === 'entrega')
 
   const filteredStudents = localStudents
     .filter((s) => !searchTerm || s.name.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -274,6 +276,8 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const studentsWithGrades = filteredStudents.map((s) => ({
     ...s,
     finalGrade: computePeriodFinalFromCompetencies(s.id, periodCompetencies, columns, grades, criterionGrades, weights, bonusCap),
+    competencyGrades: computeCompetencyGradesWithBonus(s.id, periodCompetencies, columns, grades, criterionGrades, weights, bonusCap),
+    bonusRecipientKey: getBonusRecipientKey(s.id, periodCompetencies, columns, grades, criterionGrades, weights),
   }))
 
   const sortedStudents = sortByGrade
@@ -289,6 +293,10 @@ export default function GradeTable({ course, period, students, initialGroups, on
   function exportColumn(col: GradeColumn) {
     const header = ['Estudiante', col.name]
     const rows = localStudents.map((student) => {
+      if (col.type === 'entrega') {
+        const grade = grades.find((g) => g.student_id === student.id && g.column_id === col.id)
+        return [student.name, grade?.score === 10 ? 'Sí' : grade?.score === 0 ? 'No' : '']
+      }
       const score = getStudentScore(student.id, col, grades, criterionGrades)
       return [student.name, score !== null ? score : '']
     })
@@ -459,6 +467,15 @@ export default function GradeTable({ course, period, students, initialGroups, on
                 </button>
               </th>
 
+              {entregaColumns.length > 0 && (
+                <th
+                  colSpan={entregaColumns.length}
+                  className="px-2 py-2 text-xs font-semibold text-teal-800 bg-teal-50 text-center border-r-2 border-teal-100"
+                >
+                  Entregas
+                </th>
+              )}
+
               <th className="px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 text-center min-w-24">
                 Final
               </th>
@@ -529,6 +546,19 @@ export default function GradeTable({ course, period, students, initialGroups, on
               })}
 
               <th className="px-2 py-1.5 bg-gray-100"></th>
+              {entregaColumns.map((col) => (
+                <ColumnHeader
+                  key={col.id}
+                  col={col}
+                  criteria={[]}
+                  hasGroups={false}
+                  onEdit={() => setColumnModal({ column: col })}
+                  onDelete={() => deleteColumn(col)}
+                  onQuickGrade={() => {}}
+                  onGroupGrade={() => {}}
+                  onExport={() => exportColumn(col)}
+                />
+              ))}
               <th className="px-3 py-1.5 text-center text-xs text-gray-500 bg-gray-100">
                 Form {weights.formativa}% / Sum {weights.sumativa}%
               </th>
@@ -571,9 +601,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                   {periodCompetencies.map((pc) => {
                     const meta = COMPETENCIES[pc.competency_key as CompetencyKey]
                     const pcCols = columns.filter(c => c.competency_key === pc.competency_key)
-                    const compGrade = computeCompetencyGrade(
-                      student.id, pc.competency_key, columns, grades, criterionGrades, weights, bonusCap
-                    )
+                    const compGrade = student.competencyGrades[pc.competency_key] ?? null
 
                     return (
                       <Fragment key={pc.id}>
@@ -601,6 +629,14 @@ export default function GradeTable({ course, period, students, initialGroups, on
                           <span className={`text-sm font-bold ${compGrade !== null ? meta.textColor : 'text-gray-300'}`}>
                             {compGrade !== null ? compGrade.toFixed(1) : '—'}
                           </span>
+                          {student.bonusRecipientKey === pc.competency_key && (
+                            <span
+                              className="ml-1 text-xs text-amber-600 font-bold"
+                              title="Bonus aplicado a esta competencia (era la más baja)"
+                            >
+                              ↑
+                            </span>
+                          )}
                         </td>
                       </Fragment>
                     )
@@ -625,6 +661,16 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
                   {/* Bonus placeholder */}
                   <td></td>
+
+                  {entregaColumns.map((col) => (
+                    <EntregaCell
+                      key={col.id}
+                      col={col}
+                      student={student}
+                      grades={grades}
+                      onSave={saveGrade}
+                    />
+                  ))}
 
                   <td className="px-2 py-1 text-center">
                     <span className={`text-sm font-bold ${isRisk ? 'text-red-600' : student.finalGrade !== null ? 'text-gray-800' : 'text-gray-300'}`}>
@@ -975,38 +1021,38 @@ function ColumnHeader({
     col.type === 'sumativa' ? 'text-blue-700 bg-blue-50' : 'text-purple-700 bg-purple-50'
 
   return (
-    <th className={`px-1 py-1.5 text-center border-r border-gray-200 group ${typeColor}`}>
+    <th className={`relative px-1 py-1.5 text-center border-r border-gray-200 group ${typeColor}`}>
       <div className="flex flex-col items-center gap-0.5">
-        <div className="flex items-center gap-1">
-          {(col.type === 'sumativa' || criteria.length > 0) ? (
-            <button
-              onClick={onQuickGrade}
-              className="text-xs font-medium hover:underline max-w-24 truncate text-left"
-              title={col.description || col.name}
-            >
-              {col.name}
-              {!col.description && <span className="ml-1 text-red-400" title="Falta descripción">⚠</span>}
-            </button>
-          ) : (
-            <span className="text-xs font-medium max-w-20 truncate block" title={col.description || col.name}>
-              {col.name}
-              {!col.description && <span className="ml-1 text-red-400" title="Falta descripción">⚠</span>}
-            </span>
-          )}
-          <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            {hasGroups && (
-              <button onClick={onGroupGrade} className="text-gray-400 hover:text-blue-600 text-xs" title="Calificar por grupo">👥</button>
-            )}
-            <button onClick={onExport} className="text-gray-400 hover:text-green-600 text-xs" title="Exportar notas a Excel">↓</button>
-            <button onClick={onEdit} className="text-gray-400 hover:text-blue-600 text-xs" title="Editar">✎</button>
-            <button onClick={onDelete} className="text-gray-400 hover:text-red-500 text-xs" title="Eliminar">✕</button>
-          </div>
-        </div>
-        <span className={`text-xs px-1 rounded ${typeColor} opacity-70`}>
-          {col.type === 'formativa'
-            ? criteria.length > 0 ? `Form. (${criteria.length}crit.)` : 'Form.'
-            : col.type === 'sumativa' ? `Sum. (${criteria.length}crit.)` : 'Bonus'}
-        </span>
+        {(col.type === 'sumativa' || criteria.length > 0) ? (
+          <button
+            onClick={onQuickGrade}
+            className="text-xs font-medium hover:underline max-w-24 truncate"
+            title={col.description || col.name}
+          >
+            {col.name}
+            {!col.description && <span className="ml-1 text-red-400" title="Falta descripción">⚠</span>}
+          </button>
+        ) : (
+          <span className="text-xs font-medium max-w-20 truncate" title={col.description || col.name}>
+            {col.name}
+            {!col.description && <span className="ml-1 text-red-400" title="Falta descripción">⚠</span>}
+          </span>
+        )}
+        {col.type !== 'bonus' && col.type !== 'entrega' && (
+          <span className={`text-xs px-1 rounded ${typeColor} opacity-70`}>
+            {col.type === 'formativa'
+              ? criteria.length > 0 ? `Form. (${criteria.length}crit.)` : 'Form.'
+              : `Sum. (${criteria.length}crit.)`}
+          </span>
+        )}
+      </div>
+      <div className="absolute top-1 right-0.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        {hasGroups && (
+          <button onClick={onGroupGrade} className="text-gray-400 hover:text-blue-600 text-xs" title="Calificar por grupo">👥</button>
+        )}
+        <button onClick={onExport} className="text-gray-400 hover:text-green-600 text-xs" title="Exportar notas a Excel">↓</button>
+        <button onClick={onEdit} className="text-gray-400 hover:text-blue-600 text-xs" title="Editar">✎</button>
+        <button onClick={onDelete} className="text-gray-400 hover:text-red-500 text-xs" title="Eliminar">✕</button>
       </div>
     </th>
   )
@@ -1134,6 +1180,53 @@ function GradeCell({
   )
 }
 
+// ─── Entrega Cell ────────────────────────────────────────────────────────────
+
+function EntregaCell({
+  col,
+  student,
+  grades,
+  onSave,
+}: {
+  col: GradeColumn
+  student: Student
+  grades: Grade[]
+  onSave: (studentId: string, columnId: string, score: number | null) => Promise<void>
+}) {
+  const grade = grades.find((g) => g.student_id === student.id && g.column_id === col.id)
+  const status = grade === undefined ? null : grade.score === 10 ? 'delivered' : 'not-delivered'
+  const [saving, setSaving] = useState(false)
+
+  async function toggle() {
+    setSaving(true)
+    if (status === null) await onSave(student.id, col.id, 10)
+    else if (status === 'delivered') await onSave(student.id, col.id, 0)
+    else await onSave(student.id, col.id, null)
+    setSaving(false)
+  }
+
+  return (
+    <td className="px-1 py-0.5 text-center border-r border-teal-100 bg-teal-50/30">
+      <button
+        onClick={toggle}
+        disabled={saving}
+        className={`text-base font-bold transition-colors disabled:opacity-40 ${
+          status === 'delivered' ? 'text-teal-600 hover:text-amber-400' :
+          status === 'not-delivered' ? 'text-red-400 hover:text-gray-400' :
+          'text-gray-300 hover:text-teal-500'
+        }`}
+        title={
+          status === 'delivered' ? 'Entregó — click para marcar como no entregó' :
+          status === 'not-delivered' ? 'No entregó — click para desmarcar' :
+          'Sin marcar — click para marcar como entregó'
+        }
+      >
+        {status === 'delivered' ? '✓' : status === 'not-delivered' ? '✗' : '·'}
+      </button>
+    </td>
+  )
+}
+
 // ─── Weights Editor ───────────────────────────────────────────────────────────
 
 function WeightsEditor({
@@ -1171,8 +1264,19 @@ function WeightsEditor({
       <input type="number" value={f} onChange={(e) => setF(Number(e.target.value))} className="w-12 border rounded px-1 py-0.5 text-sm" />
       <span className="text-xs text-gray-500">Sum.</span>
       <input type="number" value={s} onChange={(e) => setS(Number(e.target.value))} className="w-12 border rounded px-1 py-0.5 text-sm" />
-      <span className="text-xs text-gray-500">Bonus máx.</span>
-      <input type="number" value={bc} onChange={(e) => setBc(Number(e.target.value))} className="w-12 border rounded px-1 py-0.5 text-sm" />
+      <span className="text-xs text-gray-500">Peso bonus</span>
+      <div className="flex gap-1">
+        {[0.5, 1, 1.5].map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setBc(v)}
+            className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${bc === v ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
       <button onClick={save} className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700">OK</button>
       <button onClick={() => setOpen(false)} className="text-xs text-gray-400">✕</button>
     </div>

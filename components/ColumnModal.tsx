@@ -25,8 +25,9 @@ interface CriterionDraft {
 export default function ColumnModal({ competencyKey, column, defaultType, periodId, course, onSave, onClose }: Props) {
   const isEdit = !!column
   const [name, setName] = useState(column?.name ?? '')
+  const [isEntrega, setIsEntrega] = useState(column?.type === 'entrega')
   const [type, setType] = useState<'formativa' | 'sumativa' | 'bonus'>(
-    (column?.type ?? defaultType ?? 'formativa') as 'formativa' | 'sumativa' | 'bonus'
+    (column?.type === 'entrega' ? 'bonus' : column?.type ?? defaultType ?? 'formativa') as 'formativa' | 'sumativa' | 'bonus'
   )
   const [description, setDescription] = useState(column?.description ?? '')
   const [criteria, setCriteria] = useState<CriterionDraft[]>([])
@@ -147,7 +148,7 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
 
   async function save() {
     if (!name.trim()) { alert('Escribe el nombre de la columna'); return }
-    if (!description.trim()) { alert('La descripción es obligatoria antes de poder calificar'); return }
+    if (!isEntrega && !description.trim()) { alert('La descripción es obligatoria antes de poder calificar'); return }
     if (type === 'sumativa' && criteria.length === 0 && !isEdit) {
       if (!confirm('¿Guardar sin criterios? Podrás agregarlos después editando la columna.')) return
     }
@@ -192,7 +193,7 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
             period_id: periodId,
             name,
             description,
-            type,
+            type: isEntrega ? 'entrega' : type,
             sort_order: 99,
           }),
         })
@@ -332,22 +333,38 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
 
           {/* Criteria toggle for bonus */}
           {type === 'bonus' && (
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={bonusWithCriteria}
-                onChange={(e) => {
-                  setBonusWithCriteria(e.target.checked)
-                  if (!e.target.checked) setCriteria([])
-                }}
-                className="w-4 h-4 accent-purple-600"
-              />
-              <span className="text-sm font-medium text-gray-700">Calificar con criterios de evaluación</span>
-            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isEntrega}
+                  onChange={(e) => {
+                    setIsEntrega(e.target.checked)
+                    if (e.target.checked) { setBonusWithCriteria(false); setCriteria([]) }
+                  }}
+                  className="w-4 h-4 accent-purple-600"
+                />
+                <span className="text-sm font-medium text-gray-700">Solo entrega / no entrega <span className="text-gray-400 font-normal">(sin nota, no afecta la calificación)</span></span>
+              </label>
+              {!isEntrega && (
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={bonusWithCriteria}
+                    onChange={(e) => {
+                      setBonusWithCriteria(e.target.checked)
+                      if (!e.target.checked) setCriteria([])
+                    }}
+                    className="w-4 h-4 accent-purple-600"
+                  />
+                  <span className="text-sm font-medium text-gray-700">Calificar con criterios de evaluación</span>
+                </label>
+              )}
+            </div>
           )}
 
           {/* Criteria */}
-          {(type === 'sumativa' || (type === 'bonus' && bonusWithCriteria) || (type === 'formativa' && formativaWithCriteria)) && (
+          {!isEntrega && (type === 'sumativa' || (type === 'bonus' && bonusWithCriteria) || (type === 'formativa' && formativaWithCriteria)) && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div>

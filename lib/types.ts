@@ -56,7 +56,7 @@ export interface PeriodCompetency {
   created_at: string
 }
 
-export type GradeColumnType = 'formativa' | 'sumativa' | 'bonus'
+export type GradeColumnType = 'formativa' | 'sumativa' | 'bonus' | 'entrega'
 
 export interface GradeColumn {
   id: string
