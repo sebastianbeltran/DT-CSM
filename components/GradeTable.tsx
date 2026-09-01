@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
+import * as XLSX from 'xlsx'
 import type { Course, Period, Student, GradeColumn, Criterion, Grade, CriterionGrade, ColorRange, PeriodCompetency } from '@/lib/types'
 import type { CompetencyKey } from '@/lib/competencies'
 import { COMPETENCIES } from '@/lib/competencies'
@@ -285,6 +286,19 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
   const atRisk = sortedStudents.filter((s) => s.finalGrade !== null && s.finalGrade < 6.5)
 
+  function exportColumn(col: GradeColumn) {
+    const header = ['Estudiante', col.name]
+    const rows = localStudents.map((student) => {
+      const score = getStudentScore(student.id, col, grades, criterionGrades)
+      return [student.name, score !== null ? score : '']
+    })
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+    ws['!cols'] = [{ wch: 32 }, { wch: 10 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Notas')
+    XLSX.writeFile(wb, `${col.name} - ${course.name}.xlsx`)
+  }
+
   // Auto-weights for display
   function getCompetencyWeight(pc: PeriodCompetency): number {
     if (pc.manual_weight !== null && pc.manual_weight !== undefined) return Number(pc.manual_weight)
@@ -485,6 +499,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                             onDelete={() => deleteColumn(col)}
                             onQuickGrade={() => (col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0)) && setQuickGradeCol(col)}
                             onGroupGrade={() => groups.length > 0 && setGroupGradeCol(col)}
+                            onExport={() => exportColumn(col)}
                           />
                         )
                       })
@@ -508,6 +523,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                     onDelete={() => deleteColumn(col)}
                     onQuickGrade={() => colCriteria.length > 0 && setQuickGradeCol(col)}
                     onGroupGrade={() => groups.length > 0 && setGroupGradeCol(col)}
+                    onExport={() => exportColumn(col)}
                   />
                 )
               })}
@@ -944,6 +960,7 @@ function ColumnHeader({
   onDelete,
   onQuickGrade,
   onGroupGrade,
+  onExport,
 }: {
   col: GradeColumn
   criteria: Criterion[]
@@ -952,6 +969,7 @@ function ColumnHeader({
   onDelete: () => void
   onQuickGrade: () => void
   onGroupGrade: () => void
+  onExport: () => void
 }) {
   const typeColor = col.type === 'formativa' ? 'text-green-700 bg-green-50' :
     col.type === 'sumativa' ? 'text-blue-700 bg-blue-50' : 'text-purple-700 bg-purple-50'
@@ -979,6 +997,7 @@ function ColumnHeader({
             {hasGroups && (
               <button onClick={onGroupGrade} className="text-gray-400 hover:text-blue-600 text-xs" title="Calificar por grupo">👥</button>
             )}
+            <button onClick={onExport} className="text-gray-400 hover:text-green-600 text-xs" title="Exportar notas a Excel">↓</button>
             <button onClick={onEdit} className="text-gray-400 hover:text-blue-600 text-xs" title="Editar">✎</button>
             <button onClick={onDelete} className="text-gray-400 hover:text-red-500 text-xs" title="Eliminar">✕</button>
           </div>
@@ -1027,14 +1046,16 @@ function GradeCell({
   const hasCriteria = criteria.length > 0
   const disabled = (col.type === 'sumativa' || (col.type === 'formativa' && hasCriteria)) || !col.description
 
+  const isZero = score === 0
+
   if (col.type === 'sumativa' || hasCriteria) {
     return (
       <td
-        className="px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50"
+        className={`px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50 ${isZero ? 'bg-red-50' : ''}`}
         onClick={onOpenQuickGrade}
         title={hasCriteria ? 'Click para calificar por rúbrica' : 'Definir criterios primero'}
       >
-        <span className={`text-sm ${score !== null ? 'text-gray-800 font-medium' : 'text-gray-300'}`}>
+        <span className={`text-sm ${isZero ? 'text-red-500 font-bold' : score !== null ? 'text-gray-800 font-medium' : 'text-gray-300'}`}>
           {score !== null ? score.toFixed(1) : hasCriteria ? '·' : '—'}
         </span>
         {grade?.is_manually_adjusted && (
@@ -1090,7 +1111,7 @@ function GradeCell({
   }
 
   return (
-    <td className={`px-1 py-0.5 text-center border-r border-gray-200 ${saving ? 'bg-blue-50' : ''}`}>
+    <td className={`px-1 py-0.5 text-center border-r border-gray-200 ${saving ? 'bg-blue-50' : isZero ? 'bg-red-50' : ''}`}>
       {disabled ? (
         <span className="text-gray-300 text-xs" title="Escribe la descripción de la columna primero">—</span>
       ) : (

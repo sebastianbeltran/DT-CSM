@@ -338,17 +338,27 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
             const total = getTotal(s.id)
             const isCurrent = idx === currentStudentIdx
             const isDone = saved.has(s.id)
+            const hasScores = scores[s.id]
+              ? Object.values(scores[s.id]).some((v) => v !== '')
+              : false
+            const isZero = hasScores && total === 0
             return (
               <button
                 key={s.id}
                 onClick={() => setCurrentStudentIdx(idx)}
                 className={`w-full text-left px-4 py-3 flex items-center justify-between transition-colors ${
-                  isCurrent ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
+                  isCurrent
+                    ? 'bg-blue-600 text-white'
+                    : isZero
+                    ? 'bg-red-900/30 text-gray-200 hover:bg-red-900/50'
+                    : hasScores
+                    ? 'bg-emerald-900/40 text-gray-200 hover:bg-emerald-900/60'
+                    : 'text-gray-400 hover:bg-gray-700'
                 }`}
               >
                 <span className="text-sm truncate flex-1">{s.name}</span>
-                <span className={`text-sm font-bold ml-2 ${isCurrent ? 'text-white' : total > 0 ? 'text-green-400' : 'text-gray-500'}`}>
-                  {total > 0 ? total.toFixed(1) : isDone ? '✓' : '—'}
+                <span className={`text-sm font-bold ml-2 ${isCurrent ? 'text-white' : isZero ? 'text-red-400' : total > 0 ? 'text-green-400' : 'text-gray-500'}`}>
+                  {total > 0 ? total.toFixed(1) : isZero ? '0.0' : isDone ? '✓' : '—'}
                 </span>
               </button>
             )

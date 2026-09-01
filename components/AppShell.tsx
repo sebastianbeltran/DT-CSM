@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
+import StudentSearch from './StudentSearch'
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -27,7 +28,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <span>DT CSM</span>
         </button>
 
-        <nav className="flex items-center gap-4">
+        <nav className="flex items-center gap-2">
+          <StudentSearch />
           <button
             onClick={goHome}
             className={`text-sm px-3 py-1.5 rounded-md transition-colors ${
