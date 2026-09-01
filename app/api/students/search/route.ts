@@ -17,7 +17,7 @@ export async function GET(req: Request) {
 
   if (error || !students?.length) return NextResponse.json([])
 
-  const courseIds = [...new Set(students.map((s) => s.course_id))]
+  const courseIds = Array.from(new Set(students.map((s) => s.course_id)))
   const { data: courses } = await supabase
     .from('courses')
     .select('id, name')
