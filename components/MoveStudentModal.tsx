@@ -12,12 +12,13 @@ interface Course {
 interface Props {
   student: Student
   currentCourseId: string
+  currentCourseName: string
   yearId: string
   onMoved: (studentId: string) => void
   onClose: () => void
 }
 
-export default function MoveStudentModal({ student, currentCourseId, yearId, onMoved, onClose }: Props) {
+export default function MoveStudentModal({ student, currentCourseId, currentCourseName, yearId, onMoved, onClose }: Props) {
   const [courses, setCourses] = useState<Course[]>([])
   const [selectedCourseId, setSelectedCourseId] = useState('')
   const [moving, setMoving] = useState(false)
@@ -38,7 +39,6 @@ export default function MoveStudentModal({ student, currentCourseId, yearId, onM
     return extractGrade(a) === extractGrade(b)
   }
 
-  const currentCourseName = courses.find(() => true)?.name ?? ''
   const selectedCourse = courses.find((c) => c.id === selectedCourseId)
   const differentGrade = selectedCourse && !sameGrade(selectedCourse.name, currentCourseName)
 
@@ -85,7 +85,7 @@ export default function MoveStudentModal({ student, currentCourseId, yearId, onM
             <p className="text-sm text-gray-400 text-center py-4">No hay otros cursos en este año escolar.</p>
           ) : (
             courses.map((c) => {
-              const diffGrade = !sameGrade(c.name, courses[0]?.name ?? c.name)
+              const diffGrade = !sameGrade(c.name, currentCourseName)
               return (
                 <button
                   key={c.id}

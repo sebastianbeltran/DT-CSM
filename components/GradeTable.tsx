@@ -45,6 +45,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [loading, setLoading] = useState(true)
 
   const [quickGradeCol, setQuickGradeCol] = useState<GradeColumn | null>(null)
+  const [quickGradeInitialStudentId, setQuickGradeInitialStudentId] = useState<string | null>(null)
   const [columnModal, setColumnModal] = useState<{ competencyKey?: CompetencyKey; column?: GradeColumn; type?: string } | null>(null)
   const [reportStudent, setReportStudent] = useState<Student | null>(null)
   const [showColorConfig, setShowColorConfig] = useState(false)
@@ -620,7 +621,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                                 criterionGrades={criterionGrades}
                                 criteria={colCriteria}
                                 onSave={saveGrade}
-                                onOpenQuickGrade={() => (col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0)) && setQuickGradeCol(col)}
+                                onOpenQuickGrade={() => { if (col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0)) { setQuickGradeInitialStudentId(student.id); setQuickGradeCol(col) } }}
                               />
                             )
                           })
@@ -654,7 +655,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                         criterionGrades={criterionGrades}
                         criteria={colCriteria}
                         onSave={saveGrade}
-                        onOpenQuickGrade={() => colCriteria.length > 0 && setQuickGradeCol(col)}
+                        onOpenQuickGrade={() => { if (colCriteria.length > 0) { setQuickGradeInitialStudentId(student.id); setQuickGradeCol(col) } }}
                       />
                     )
                   })}
@@ -753,10 +754,11 @@ export default function GradeTable({ course, period, students, initialGroups, on
         <QuickGradeMode
           column={quickGradeCol}
           criteria={criteria.filter((c) => c.column_id === quickGradeCol.id)}
-          students={students}
+          students={localStudents}
           grades={grades}
           criterionGrades={criterionGrades}
-          onClose={() => setQuickGradeCol(null)}
+          initialStudentId={quickGradeInitialStudentId ?? undefined}
+          onClose={() => { setQuickGradeCol(null); setQuickGradeInitialStudentId(null) }}
           onSave={onQuickGradeSaved}
         />
       )}
@@ -783,7 +785,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
           grades={grades}
           criterionGrades={criterionGrades}
           criteria={criteria}
-          students={students}
+          students={localStudents}
           onClose={() => setReportStudent(null)}
         />
       )}
@@ -800,7 +802,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
       {showGroupsPanel && (
         <GroupsPanel
           courseId={course.id}
-          students={students}
+          students={localStudents}
           groups={groups}
           onGroupsChange={setGroups}
           onClose={() => setShowGroupsPanel(false)}
@@ -811,6 +813,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
         <MoveStudentModal
           student={moveStudent}
           currentCourseId={course.id}
+          currentCourseName={course.name}
           yearId={course.school_year_id}
           onMoved={(id) => setLocalStudents((prev) => prev.filter((s) => s.id !== id))}
           onClose={() => setMoveStudent(null)}
@@ -822,7 +825,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
           column={groupGradeCol}
           criteria={criteria.filter((c) => c.column_id === groupGradeCol.id)}
           groups={groups}
-          students={students}
+          students={localStudents}
           grades={grades}
           onSave={(updatedGrades) => {
             setGrades((prev) => {

@@ -9,6 +9,7 @@ interface Props {
   students: Student[]
   grades: Grade[]
   criterionGrades: CriterionGrade[]
+  initialStudentId?: string
   onClose: () => void
   onSave: (grades: Grade[], criterionGrades: CriterionGrade[]) => void
 }
@@ -17,8 +18,12 @@ interface StudentScores {
   [studentId: string]: { [criterionId: string]: string }
 }
 
-export default function QuickGradeMode({ column, criteria, students, grades, criterionGrades, onClose, onSave }: Props) {
-  const [currentStudentIdx, setCurrentStudentIdx] = useState(0)
+export default function QuickGradeMode({ column, criteria, students, grades, criterionGrades, initialStudentId, onClose, onSave }: Props) {
+  const [currentStudentIdx, setCurrentStudentIdx] = useState(() => {
+    if (!initialStudentId) return 0
+    const idx = students.findIndex((s) => s.id === initialStudentId)
+    return idx >= 0 ? idx : 0
+  })
   const [scores, setScores] = useState<StudentScores>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState<Set<string>>(new Set())

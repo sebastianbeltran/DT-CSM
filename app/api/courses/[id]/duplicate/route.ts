@@ -62,7 +62,7 @@ async function copyColumn(sourceCol: Record<string, unknown>, targetPeriodId: st
       if (srcCriteria?.length) {
         await supabase.from('criteria').delete().eq('column_id', existing.id)
         await supabase.from('criteria').insert(
-          srcCriteria.map((c) => ({ column_id: existing.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order }))
+          srcCriteria.map((c) => ({ column_id: existing.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order, levels: c.levels ?? null }))
         )
       }
     }
@@ -87,7 +87,7 @@ async function copyColumn(sourceCol: Record<string, unknown>, targetPeriodId: st
     const { data: srcCriteria } = await supabase.from('criteria').select('*').eq('column_id', sourceCol.id as string).order('sort_order')
     if (srcCriteria?.length) {
       await supabase.from('criteria').insert(
-        srcCriteria.map((c) => ({ column_id: newCol.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order }))
+        srcCriteria.map((c) => ({ column_id: newCol.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order, levels: c.levels ?? null }))
       )
     }
   }
