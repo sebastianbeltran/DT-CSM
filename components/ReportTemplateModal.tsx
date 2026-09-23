@@ -197,6 +197,11 @@ export default function ReportTemplateModal({ students, period, onClose }: Props
                   placeholder={`[Nombre] ha demostrado un desarrollo sobresaliente en las actividades de análisis...`}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none bg-white"
                 />
+                {tpl.text.trim() && !/\[nombre\]/i.test(tpl.text) && (
+                  <p className="text-xs text-amber-600 flex items-center gap-1">
+                    ⚠️ Esta plantilla no tiene <code className="bg-amber-50 px-1 rounded">[Nombre]</code> — los informes generados no incluirán el nombre de la estudiante.
+                  </p>
+                )}
 
                 {/* Students grid */}
                 <div>
