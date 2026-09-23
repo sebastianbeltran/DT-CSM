@@ -83,12 +83,21 @@ export default function Dashboard({
 
   // Detect if file has multiple sheets (preview)
   const [fileSheets, setFileSheets] = useState<string[]>([])
+  const [importIsPdf, setImportIsPdf] = useState(false)
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null
     setImportFile(f)
     setFileSheets([])
+    setImportIsPdf(false)
     if (!f) return
+
+    if (f.name.toLowerCase().endsWith('.pdf')) {
+      setImportIsPdf(true)
+      setImportCourseName('')
+      return
+    }
+
     // Read sheet names client-side to show preview
     const reader = new FileReader()
     reader.onload = (ev) => {
@@ -104,9 +113,9 @@ export default function Dashboard({
 
   // Main import flow
   async function handleImport() {
-    if (!importFile) { alert('Selecciona un archivo Excel'); return }
+    if (!importFile) { alert('Selecciona un archivo Excel o PDF'); return }
     if (!selectedYearId) { alert('Selecciona un año escolar primero'); return }
-    if (fileSheets.length <= 1 && !importCourseName.trim()) { alert('Escribe el nombre del curso'); return }
+    if (!importIsPdf && fileSheets.length <= 1 && !importCourseName.trim()) { alert('Escribe el nombre del curso'); return }
 
     setImporting(true)
     const fd = new FormData()
@@ -120,17 +129,27 @@ export default function Dashboard({
 
     if (res.ok) {
       if (data.multiSheet) {
-        const resumen = data.results.map((r: { course: string; inserted: number; total: number }) =>
-          `• ${r.course}: ${r.total} estudiantes`
-        ).join('\n')
-        alert(`✓ Importación completa:\n${resumen}`)
+        const resumen = data.results.map((r: { course: string; inserted: number; moved: number; archived: number; total: number }) => {
+          const partes = [`• ${r.course}: ${r.total} estudiantes`]
+          if (r.inserted > 0) partes.push(`+${r.inserted} nuevas`)
+          if (r.moved > 0) partes.push(`${r.moved} cambiaron de curso`)
+          if (r.archived > 0) partes.push(`${r.archived} archivadas`)
+          return partes.length > 1 ? `${partes[0]} (${partes.slice(1).join(', ')})` : partes[0]
+        }).join('\n')
+        alert(`✓ Sincronización completa:\n${resumen}`)
       } else {
-        alert(`✓ Listo: ${data.total} estudiantes importadas`)
+        const curso = data.detectedCourse ? ` · Curso: ${data.detectedCourse}` : ''
+        const partes = [`${data.total} estudiantes activas`]
+        if (data.inserted > 0) partes.push(`+${data.inserted} nuevas`)
+        if (data.moved > 0) partes.push(`${data.moved} cambiaron de curso`)
+        if (data.archived > 0) partes.push(`${data.archived} archivadas`)
+        alert(`✓ Listo: ${partes.join(' · ')}${curso}`)
       }
       setShowImport(false)
       setImportCourseName('')
       setImportFile(null)
       setFileSheets([])
+      setImportIsPdf(false)
       window.location.reload()
     } else {
       alert('Error: ' + data.error)
@@ -171,7 +190,12 @@ export default function Dashboard({
     const data = await res.json()
     setImporting(false)
     if (res.ok) {
-      alert(`Actualización exitosa: ${data.inserted} nuevas estudiantes (${data.total} total)`)
+      const partes = [`${data.total} estudiantes activas`]
+      if (data.inserted > 0) partes.push(`+${data.inserted} nuevas`)
+      if (data.moved > 0) partes.push(`${data.moved} cambiaron de curso`)
+      if (data.archived > 0) partes.push(`${data.archived} archivadas`)
+      alert(`✓ Lista actualizada: ${partes.join(' · ')}`)
+      window.location.reload()
     } else {
       alert('Error: ' + data.error)
     }
@@ -182,7 +206,7 @@ export default function Dashboard({
   return (
     <div className="max-w-4xl mx-auto">
       {/* Hidden file input for re-import */}
-      <input ref={reimportFileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleReimport} />
+      <input ref={reimportFileRef} type="file" accept=".xlsx,.xls,.pdf" className="hidden" onChange={handleReimport} />
 
       {/* Year selector */}
       <div className="flex items-center gap-3 mb-6 flex-wrap">
@@ -371,11 +395,11 @@ export default function Dashboard({
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-bold text-gray-900">Importar lista de estudiantes</h2>
-              <button onClick={() => { setShowImport(false); setImportCourseName(''); setImportFile(null) }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+              <button onClick={() => { setShowImport(false); setImportCourseName(''); setImportFile(null); setImportIsPdf(false); setFileSheets([]) }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
 
             <div className="space-y-4">
-              {fileSheets.length <= 1 && (
+              {!importIsPdf && fileSheets.length <= 1 && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Nombre del curso *
@@ -388,22 +412,27 @@ export default function Dashboard({
                     placeholder="Ej: 9A, 10B, 7C..."
                     className="w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
-                  <p className="text-xs text-gray-400 mt-1">Si el curso ya existe, solo se agregarán estudiantes nuevas.</p>
+                  <p className="text-xs text-gray-400 mt-1">Si el curso ya existe, se sincroniza la lista: se agregan nuevas y se archivan las que ya no aparecen.</p>
                 </div>
               )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Archivo Excel (.xlsx) *
+                  Archivo (.xlsx, .xls o .pdf) *
                 </label>
                 <input
                   ref={fileRef}
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xls,.pdf"
                   onChange={handleFileChange}
                   className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:cursor-pointer hover:file:bg-blue-100"
                 />
-                {fileSheets.length > 1 && (
+                {importIsPdf && (
+                  <div className="mt-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+                    <p className="text-xs text-purple-700 font-medium">PDF de Phidias detectado — el nombre del curso se leerá del campo <strong>Grupo</strong> automáticamente.</p>
+                  </div>
+                )}
+                {!importIsPdf && fileSheets.length > 1 && (
                   <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
                     <p className="text-xs text-blue-700 font-medium mb-1">Se detectaron {fileSheets.length} cursos — se importarán todos:</p>
                     <div className="flex flex-wrap gap-1">
@@ -413,20 +442,20 @@ export default function Dashboard({
                     </div>
                   </div>
                 )}
-                <p className="text-xs text-gray-400 mt-1">Si el Excel tiene varias hojas, cada hoja se importa como un curso separado.</p>
+                <p className="text-xs text-gray-400 mt-1">Excel con varias hojas importa cada hoja como un curso. PDF de Phidias detecta el curso automáticamente.</p>
               </div>
             </div>
 
             <div className="flex gap-3 mt-6">
               <button
-                onClick={() => { setShowImport(false); setImportCourseName(''); setImportFile(null) }}
+                onClick={() => { setShowImport(false); setImportCourseName(''); setImportFile(null); setImportIsPdf(false); setFileSheets([]) }}
                 className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm hover:bg-gray-50"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleImport}
-                disabled={importing || !importFile || (fileSheets.length <= 1 && !importCourseName.trim())}
+                disabled={importing || !importFile || (!importIsPdf && fileSheets.length <= 1 && !importCourseName.trim())}
                 className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {importing ? (

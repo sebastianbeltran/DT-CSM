@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { computePeriodFinalFromCompetencies } from '@/lib/calculations'
 import type { PeriodCompetency } from '@/lib/types'
+import * as XLSX from 'xlsx'
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
@@ -36,11 +37,7 @@ export async function GET(req: Request) {
   const bonusCap = period?.bonus_cap ?? course?.bonus_cap ?? 10
   const allPeriodCompetencies: PeriodCompetency[] = (periodCompetencies ?? []) as PeriodCompetency[]
 
-  let content = `INFORMES DE DESEMPEÑO\n`
-  content += `Curso: ${course?.name ?? ''} | Periodo: ${period?.name ?? ''}\n`
-  content += `=`.repeat(60) + '\n\n'
-
-  for (const student of students ?? []) {
+  const rows = (students ?? []).map((student) => {
     const report = reports?.find((r) => r.student_id === student.id)
     const final = computePeriodFinalFromCompetencies(
       student.id,
@@ -51,20 +48,28 @@ export async function GET(req: Request) {
       weights,
       bonusCap
     )
+    return {
+      Estudiante: student.name,
+      'Nota final': final !== null ? final : '',
+      Informe: report?.content ?? '',
+    }
+  })
 
-    content += `ESTUDIANTE: ${student.name}\n`
-    content += `Nota final: ${final !== null ? final.toFixed(1) : 'Pendiente'}\n`
-    content += `-`.repeat(40) + '\n'
-    content += report?.content ?? '(Sin informe generado)\n'
-    content += '\n\n'
-  }
+  const ws = XLSX.utils.json_to_sheet(rows)
 
-  const buf = Buffer.from(content, 'utf-8')
+  // Column widths: name=30, grade=12, comment=80
+  ws['!cols'] = [{ wch: 30 }, { wch: 12 }, { wch: 80 }]
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Informes')
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+  const filename = `Informes_${course?.name ?? ''}_${period?.name ?? ''}.xlsx`
 
   return new NextResponse(buf, {
     headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Content-Disposition': `attachment; filename="Informes_${course?.name ?? ''}_${period?.name ?? ''}.txt"`,
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
     },
   })
 }

@@ -15,6 +15,7 @@ import {
 import QuickGradeMode from './QuickGradeMode'
 import ColumnModal from './ColumnModal'
 import ReportModal from './ReportModal'
+import ReportTemplateModal from './ReportTemplateModal'
 import ColorRangeConfig from './ColorRangeConfig'
 import GroupsPanel from './GroupsPanel'
 import GroupGradeModal from './GroupGradeModal'
@@ -51,6 +52,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [showColorConfig, setShowColorConfig] = useState(false)
   const [showGroupsPanel, setShowGroupsPanel] = useState(false)
   const [moveStudent, setMoveStudent] = useState<Student | null>(null)
+  const [showReportTemplate, setShowReportTemplate] = useState(false)
   const [addingStudentInline, setAddingStudentInline] = useState(false)
   const [newStudentName, setNewStudentName] = useState('')
   const [groups, setGroups] = useState<Group[]>(initialGroups)
@@ -365,6 +367,13 @@ export default function GradeTable({ course, period, students, initialGroups, on
           className="text-sm px-3 py-1.5 border border-gray-300 bg-white rounded-lg hover:bg-gray-50 flex items-center gap-1"
         >
           👥 Grupos {groups.length > 0 && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 rounded-full">{groups.length}</span>}
+        </button>
+
+        <button
+          onClick={() => setShowReportTemplate(true)}
+          className="text-sm px-3 py-1.5 border border-gray-300 bg-white rounded-lg hover:bg-gray-50 flex items-center gap-1"
+        >
+          📝 Informes
         </button>
 
         {atRisk.length > 0 && (
@@ -787,6 +796,14 @@ export default function GradeTable({ course, period, students, initialGroups, on
           criteria={criteria}
           students={localStudents}
           onClose={() => setReportStudent(null)}
+        />
+      )}
+
+      {showReportTemplate && (
+        <ReportTemplateModal
+          students={localStudents}
+          period={period}
+          onClose={() => setShowReportTemplate(false)}
         />
       )}
 
