@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { Student, Period } from '@/lib/types'
 
 interface Template {
@@ -26,6 +26,22 @@ function newTemplate(): Template {
   return { id: crypto.randomUUID(), text: '', studentIds: new Set() }
 }
 
+function loadSaved(): Template[] {
+  try {
+    const raw = localStorage.getItem('report-templates')
+    if (!raw) return [newTemplate()]
+    const texts: string[] = JSON.parse(raw)
+    if (!Array.isArray(texts) || texts.length === 0) return [newTemplate()]
+    return texts.map((text) => ({ id: crypto.randomUUID(), text, studentIds: new Set() }))
+  } catch {
+    return [newTemplate()]
+  }
+}
+
+function save(templates: Template[]) {
+  localStorage.setItem('report-templates', JSON.stringify(templates.map((t) => t.text)))
+}
+
 // "ESPINOSA CALDERÓN, MARÍA DEL MAR" → "María Del Mar"
 function firstName(fullName: string): string {
   const after = fullName.includes(',') ? fullName.split(',')[1] : fullName
@@ -36,9 +52,11 @@ function firstName(fullName: string): string {
 }
 
 export default function ReportTemplateModal({ students, period, onClose }: Props) {
-  const [templates, setTemplates] = useState<Template[]>([newTemplate()])
+  const [templates, setTemplates] = useState<Template[]>(loadSaved)
   const [generating, setGenerating] = useState(false)
   const [result, setResult] = useState<{ done: number; errors: number } | null>(null)
+
+  useEffect(() => { save(templates) }, [templates])
 
   const totalAssigned = templates.reduce((sum, t) => sum + t.studentIds.size, 0)
 
