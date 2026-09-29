@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
+import { createPortal } from 'react-dom'
 import * as XLSX from 'xlsx'
 import type { Course, Period, Student, GradeColumn, Criterion, Grade, CriterionGrade, ColorRange, PeriodCompetency } from '@/lib/types'
 import type { CompetencyKey } from '@/lib/competencies'
@@ -979,7 +980,7 @@ function CopyCompetencyButton({
     )
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-5" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-sm font-bold mb-1">Copiar evaluaciones a otro curso</h2>
@@ -1012,7 +1013,8 @@ function CopyCompetencyButton({
           Cerrar
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
