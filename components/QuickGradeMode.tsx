@@ -564,7 +564,7 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
                         <span className="text-xs text-blue-500 font-medium">↑↓ · Enter</span>
                       )}
                       {isActive && inRangeMode && (
-                        <span className="text-xs text-amber-600 font-medium">←→ valor exacto · Enter</span>
+                        <span className="text-xs text-blue-500 font-medium">←→ valor exacto · Enter</span>
                       )}
                       <span className="text-sm text-gray-500">
                         {isNaN(num) ? '—' : num} / {criterion.max_score} pts
@@ -596,12 +596,10 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
                               panelRef.current?.focus()
                             }}
                             className={`w-full text-left px-4 py-3 rounded-xl border-2 transition-colors ${
-                              selected && hovered
-                                ? 'border-blue-500 bg-blue-50 ring-2 ring-amber-400'
-                                : selected
+                              selected
                                 ? 'border-blue-500 bg-blue-50'
                                 : hovered
-                                ? 'border-amber-400 bg-amber-50'
+                                ? 'border-blue-300 bg-blue-50/60'
                                 : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
                             }`}
                           >
@@ -613,7 +611,7 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
                                 <p className="text-xs text-gray-500 mt-0.5 leading-snug">{level.description}</p>
                               </div>
                               <span className={`font-bold text-sm whitespace-nowrap mt-0.5 ${
-                                selected ? 'text-blue-700' : hovered ? 'text-amber-700' : 'text-gray-400'
+                                selected ? 'text-blue-700' : hovered ? 'text-blue-500' : 'text-gray-400'
                               }`}>
                                 {level.points} pts
                               </span>
