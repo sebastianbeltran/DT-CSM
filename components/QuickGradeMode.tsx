@@ -415,16 +415,17 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
         <div className="flex-1 overflow-y-auto">
           {students.map((s, idx) => {
             const totals = sessions.map(sess => getTotal(s.id, sess.column.id))
-            const anyScore = sessions.some(sess =>
+            const sessionHasScore = sessions.map(sess =>
               Object.values(scores[s.id]?.[sess.column.id] ?? {}).some(v => v !== '')
             )
+            const anyScore = sessionHasScore.some(Boolean)
             const allZero = anyScore && totals.every(t => t === 0)
             const isCurrent = idx === currentStudentIdx
             const isDone = saved.has(s.id)
             const displayScore = sessions.length === 1
-              ? (totals[0] > 0 ? totals[0].toFixed(1) : allZero ? '0.0' : isDone ? '✓' : '—')
-              : totals.some(t => t > 0)
-              ? totals.map(t => t > 0 ? t.toFixed(1) : '—').join(' / ')
+              ? (sessionHasScore[0] ? totals[0].toFixed(1) : isDone ? '✓' : '—')
+              : anyScore
+              ? totals.map((t, i) => sessionHasScore[i] ? t.toFixed(1) : '—').join(' / ')
               : isDone ? '✓' : '—'
 
             return (
