@@ -19,19 +19,22 @@ export function getStudentScore(
   )
   if (!grade) return null
 
-  // For sumativa and bonus always use criteria sum; for formativa use it if criteria exist
+  let score: number | null = null
+
   if (column.type === 'sumativa' || column.type === 'bonus') {
     const total = computeCriteriaTotal(grade.id, criterionGrades)
-    return total > 0 ? total : grade.score ?? null
-  }
-
-  if (column.type === 'formativa') {
+    score = total > 0 ? total : grade.score ?? null
+  } else if (column.type === 'formativa') {
     const total = computeCriteriaTotal(grade.id, criterionGrades)
-    if (total > 0) return total
-    return grade.score ?? null
+    score = total > 0 ? total : grade.score ?? null
+  } else {
+    score = grade.score ?? null
   }
 
-  return grade.score ?? null
+  if (score === null) return null
+  // entrega columns can legitimately be 0 (not delivered); all others enforce min 1
+  if (column.type === 'entrega') return score
+  return Math.max(1, score)
 }
 
 // Calculates weighted grade for a set of columns (used per-competency and for bonus)

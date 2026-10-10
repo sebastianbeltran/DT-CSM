@@ -13,7 +13,7 @@ import {
   getStudentScore,
   getColorForGrade,
 } from '@/lib/calculations'
-import QuickGradeMode from './QuickGradeMode'
+import QuickGradeMode, { type ColumnSession } from './QuickGradeMode'
 import ColumnModal from './ColumnModal'
 import ReportModal from './ReportModal'
 import ReportTemplateModal from './ReportTemplateModal'
@@ -46,8 +46,9 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [colorRanges, setColorRanges] = useState<ColorRange[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [quickGradeCol, setQuickGradeCol] = useState<GradeColumn | null>(null)
+  const [quickGradeSessions, setQuickGradeSessions] = useState<ColumnSession[] | null>(null)
   const [quickGradeInitialStudentId, setQuickGradeInitialStudentId] = useState<string | null>(null)
+  const [colPickerFor, setColPickerFor] = useState<{ col: GradeColumn; studentId?: string } | null>(null)
   const [columnModal, setColumnModal] = useState<{ competencyKey?: CompetencyKey; column?: GradeColumn; type?: string } | null>(null)
   const [reportStudent, setReportStudent] = useState<Student | null>(null)
   const [showColorConfig, setShowColorConfig] = useState(false)
@@ -190,7 +191,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
       const res = await fetch('/api/grades', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, column_id: columnId, score }),
+        body: JSON.stringify({ student_id: studentId, column_id: columnId, score: columns.find(c => c.id === columnId)?.type === 'entrega' ? score : Math.max(1, score) }),
       })
       if (!res.ok) { console.error('Grade save failed', res.status); return }
       const data = await res.json()
@@ -247,6 +248,21 @@ export default function GradeTable({ course, period, students, initialGroups, on
     setColumnModal(null)
   }
 
+  function openQuickGrade(col: GradeColumn, studentId?: string) {
+    const colCriteria = criteria.filter((c) => c.column_id === col.id)
+    if (!(col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0))) return
+    const eligible = columns.filter((c) => {
+      const cc = criteria.filter((cr) => cr.column_id === c.id)
+      return c.type === 'sumativa' || (c.type === 'formativa' && cc.length > 0)
+    })
+    if (eligible.length <= 1) {
+      setQuickGradeSessions([{ column: col, criteria: colCriteria }])
+      setQuickGradeInitialStudentId(studentId ?? null)
+    } else {
+      setColPickerFor({ col, studentId })
+    }
+  }
+
   function onQuickGradeSaved(savedGrades: Grade[], savedCriterionGrades: CriterionGrade[]) {
     setGrades((prev) => {
       let updated = [...prev]
@@ -266,8 +282,9 @@ export default function GradeTable({ course, period, students, initialGroups, on
       }
       return updated
     })
-    if (quickGradeCol) {
-      setColumns((prev) => prev.map((c) => (c.id === quickGradeCol.id ? { ...c, has_grades: true } : c)))
+    if (quickGradeSessions) {
+      const sessionColIds = new Set(quickGradeSessions.map((s) => s.column.id))
+      setColumns((prev) => prev.map((c) => sessionColIds.has(c.id) ? { ...c, has_grades: true } : c))
     }
   }
 
@@ -525,7 +542,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                             hasGroups={groups.length > 0}
                             onEdit={() => setColumnModal({ column: col })}
                             onDelete={() => deleteColumn(col)}
-                            onQuickGrade={() => (col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0)) && setQuickGradeCol(col)}
+                            onQuickGrade={() => openQuickGrade(col)}
                             onGroupGrade={() => groups.length > 0 && setGroupGradeCol(col)}
                             onExport={() => exportColumn(col)}
                           />
@@ -549,7 +566,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                     hasGroups={groups.length > 0}
                     onEdit={() => setColumnModal({ column: col })}
                     onDelete={() => deleteColumn(col)}
-                    onQuickGrade={() => colCriteria.length > 0 && setQuickGradeCol(col)}
+                    onQuickGrade={() => openQuickGrade(col)}
                     onGroupGrade={() => groups.length > 0 && setGroupGradeCol(col)}
                     onExport={() => exportColumn(col)}
                   />
@@ -631,7 +648,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                                 criterionGrades={criterionGrades}
                                 criteria={colCriteria}
                                 onSave={saveGrade}
-                                onOpenQuickGrade={() => { if (col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0)) { setQuickGradeInitialStudentId(student.id); setQuickGradeCol(col) } }}
+                                onOpenQuickGrade={() => openQuickGrade(col, student.id)}
                               />
                             )
                           })
@@ -665,7 +682,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                         criterionGrades={criterionGrades}
                         criteria={colCriteria}
                         onSave={saveGrade}
-                        onOpenQuickGrade={() => { if (colCriteria.length > 0) { setQuickGradeInitialStudentId(student.id); setQuickGradeCol(col) } }}
+                        onOpenQuickGrade={() => openQuickGrade(col, student.id)}
                       />
                     )
                   })}
@@ -760,15 +777,32 @@ export default function GradeTable({ course, period, students, initialGroups, on
       </div>
 
       {/* Modals */}
-      {quickGradeCol && (
+      {colPickerFor && (
+        <ColumnPickerModal
+          trigger={colPickerFor}
+          columns={columns}
+          criteria={criteria}
+          onConfirm={(selectedCols) => {
+            const sessions: ColumnSession[] = selectedCols.map((col) => ({
+              column: col,
+              criteria: criteria.filter((c) => c.column_id === col.id),
+            }))
+            setQuickGradeSessions(sessions)
+            setQuickGradeInitialStudentId(colPickerFor.studentId ?? null)
+            setColPickerFor(null)
+          }}
+          onCancel={() => setColPickerFor(null)}
+        />
+      )}
+
+      {quickGradeSessions && (
         <QuickGradeMode
-          column={quickGradeCol}
-          criteria={criteria.filter((c) => c.column_id === quickGradeCol.id)}
+          sessions={quickGradeSessions}
           students={localStudents}
           grades={grades}
           criterionGrades={criterionGrades}
           initialStudentId={quickGradeInitialStudentId ?? undefined}
-          onClose={() => { setQuickGradeCol(null); setQuickGradeInitialStudentId(null) }}
+          onClose={() => { setQuickGradeSessions(null); setQuickGradeInitialStudentId(null) }}
           onSave={onQuickGradeSaved}
         />
       )}
@@ -1301,6 +1335,100 @@ function WeightsEditor({
       </div>
       <button onClick={save} className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700">OK</button>
       <button onClick={() => setOpen(false)} className="text-xs text-gray-400">✕</button>
+    </div>
+  )
+}
+
+// ─── Column Picker Modal ──────────────────────────────────────────────────────
+
+function ColumnPickerModal({
+  trigger,
+  columns,
+  criteria,
+  onConfirm,
+  onCancel,
+}: {
+  trigger: { col: GradeColumn; studentId?: string }
+  columns: GradeColumn[]
+  criteria: Criterion[]
+  onConfirm: (cols: GradeColumn[]) => void
+  onCancel: () => void
+}) {
+  const eligible = columns.filter((col) => {
+    const cc = criteria.filter((c) => c.column_id === col.id)
+    return col.type === 'sumativa' || (col.type === 'formativa' && cc.length > 0)
+  })
+
+  const [selected, setSelected] = useState<Set<string>>(() => new Set([trigger.col.id]))
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        if (next.size > 1) next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  function confirm() {
+    const selectedCols = eligible
+      .filter((col) => selected.has(col.id))
+      .sort((a, b) => a.sort_order - b.sort_order)
+    onConfirm(selectedCols)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+      <div className="bg-white rounded-2xl p-6 w-96 max-h-[80vh] flex flex-col shadow-2xl">
+        <h2 className="text-lg font-bold text-gray-900 mb-1">Calificación rápida</h2>
+        <p className="text-sm text-gray-500 mb-4">Selecciona las actividades a calificar en esta sesión</p>
+        <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+          {eligible.map((col) => {
+            const isSelected = selected.has(col.id)
+            const isPending = !col.has_grades
+            return (
+              <button
+                key={col.id}
+                onClick={() => toggle(col.id)}
+                className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-colors text-left ${
+                  isSelected
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                  isSelected ? 'border-blue-500 bg-blue-500' : 'border-gray-300'
+                }`}>
+                  {isSelected && <span className="text-white text-xs leading-none">✓</span>}
+                </div>
+                <span className="flex-1 text-sm font-medium text-gray-900">{col.name}</span>
+                {isPending && (
+                  <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                    Pendiente
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm hover:bg-gray-50 transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={confirm}
+            className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            Comenzar ({selected.size})
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

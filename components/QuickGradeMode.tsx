@@ -3,9 +3,13 @@
 import { useState, useEffect, useRef } from 'react'
 import type { GradeColumn, Criterion, CriterionLevel, Student, Grade, CriterionGrade } from '@/lib/types'
 
-interface Props {
+export interface ColumnSession {
   column: GradeColumn
   criteria: Criterion[]
+}
+
+interface Props {
+  sessions: ColumnSession[]
   students: Student[]
   grades: Grade[]
   criterionGrades: CriterionGrade[]
@@ -14,11 +18,12 @@ interface Props {
   onSave: (grades: Grade[], criterionGrades: CriterionGrade[]) => void
 }
 
+// studentId -> columnId -> criterionId -> value
 interface StudentScores {
-  [studentId: string]: { [criterionId: string]: string }
+  [studentId: string]: { [columnId: string]: { [criterionId: string]: string } }
 }
 
-export default function QuickGradeMode({ column, criteria, students, grades, criterionGrades, initialStudentId, onClose, onSave }: Props) {
+export default function QuickGradeMode({ sessions, students, grades, criterionGrades, initialStudentId, onClose, onSave }: Props) {
   const [currentStudentIdx, setCurrentStudentIdx] = useState(() => {
     if (!initialStudentId) return 0
     const idx = students.findIndex((s) => s.id === initialStudentId)
@@ -30,15 +35,18 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
   const inputRefs = useRef<(HTMLInputElement | null)[]>([])
   const panelRef = useRef<HTMLDivElement>(null)
   const criterionRefs = useRef<(HTMLDivElement | null)[]>([])
+  const scoresRef = useRef<StudentScores>({})
 
-  // Keyboard navigation state for levels-based criteria
   const [activeCriterionIdx, setActiveCriterionIdx] = useState(0)
+  const [activeSessionIdx, setActiveSessionIdx] = useState(0)
   const [hoveredLevelIdx, setHoveredLevelIdx] = useState(0)
   const [inRangeMode, setInRangeMode] = useState(false)
   const [rangeStepIdx, setRangeStepIdx] = useState(0)
 
-  // Auto-composed feedback per student
   const [feedbacks, setFeedbacks] = useState<Record<string, string>>({})
+
+  const activeSession = sessions[activeSessionIdx] ?? sessions[0]
+  const activeCriteria = activeSession?.criteria ?? []
 
   useEffect(() => {
     criterionRefs.current[activeCriterionIdx]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
@@ -48,26 +56,32 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
     const initial: StudentScores = {}
     for (const student of students) {
       initial[student.id] = {}
-      const grade = grades.find((g) => g.student_id === student.id && g.column_id === column.id)
-      if (grade) {
-        for (const criterion of criteria) {
-          const cg = criterionGrades.find((cg) => cg.grade_id === grade.id && cg.criterion_id === criterion.id)
-          initial[student.id][criterion.id] = cg ? cg.score.toString() : ''
-        }
-      } else {
-        for (const criterion of criteria) {
-          initial[student.id][criterion.id] = ''
+      for (const session of sessions) {
+        initial[student.id][session.column.id] = {}
+        const grade = grades.find((g) => g.student_id === student.id && g.column_id === session.column.id)
+        if (grade) {
+          for (const criterion of session.criteria) {
+            const cg = criterionGrades.find((cg) => cg.grade_id === grade.id && cg.criterion_id === criterion.id)
+            initial[student.id][session.column.id][criterion.id] = cg ? cg.score.toString() : ''
+          }
+        } else {
+          for (const criterion of session.criteria) {
+            initial[student.id][session.column.id][criterion.id] = ''
+          }
         }
       }
     }
     setScores(initial)
+    scoresRef.current = initial
   }, [])
 
   useEffect(() => {
     setActiveCriterionIdx(0)
+    setActiveSessionIdx(0)
     setHoveredLevelIdx(0)
     setInRangeMode(false)
-    if (criteria[0]?.levels?.length) {
+    const firstCriteria = sessions[0]?.criteria ?? []
+    if (firstCriteria[0]?.levels?.length) {
       setTimeout(() => panelRef.current?.focus(), 50)
     } else {
       setTimeout(() => inputRefs.current[0]?.focus(), 50)
@@ -92,61 +106,97 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
     return parseLevelPoints(level.points).includes(num)
   }
 
-  function getTotal(studentId: string): number {
-    if (!scores[studentId]) return 0
-    return criteria.reduce((sum, c) => {
-      const v = parseFloat(scores[studentId]?.[c.id] ?? '0')
+  function getTotal(studentId: string, columnId: string, src?: StudentScores): number {
+    const s = src ?? scores
+    const colScores = s[studentId]?.[columnId] ?? {}
+    const session = sessions.find(sess => sess.column.id === columnId)
+    if (!session) return 0
+    return session.criteria.reduce((sum, c) => {
+      const v = parseFloat(colScores[c.id] ?? '0')
       return sum + (isNaN(v) ? 0 : v)
     }, 0)
   }
 
+  function getActiveTotal(studentId: string): number {
+    return getTotal(studentId, activeSession.column.id)
+  }
+
   function handleChange(criterionIdx: number, value: string, criterion: Criterion) {
     const studentId = currentStudent.id
-    setScores((prev) => ({
-      ...prev,
-      [studentId]: { ...prev[studentId], [criterion.id]: value },
-    }))
+    const columnId = activeSession.column.id
+    const updated: StudentScores = {
+      ...scoresRef.current,
+      [studentId]: {
+        ...scoresRef.current[studentId],
+        [columnId]: {
+          ...scoresRef.current[studentId]?.[columnId],
+          [criterion.id]: value,
+        },
+      },
+    }
+    scoresRef.current = updated
+    setScores(updated)
   }
 
   function composeFeedback(studentId: string): string {
-    const studentScores = scores[studentId] ?? {}
-    const lines = criteria
-      .filter((c) => c.levels?.length)
-      .map((c) => {
-        const val = studentScores[c.id] ?? ''
+    const lines: string[] = []
+    for (const session of sessions) {
+      const colScores = scoresRef.current[studentId]?.[session.column.id] ?? {}
+      for (const c of session.criteria) {
+        if (!c.levels?.length) continue
+        const val = colScores[c.id] ?? ''
         const num = parseFloat(val)
         const selected = c.levels!.find((l) => isLevelSelected(l, val))
-        if (!selected) return null
-        return `• ${c.name} (${isNaN(num) ? '—' : num}/${c.max_score} — ${selected.label}): ${selected.description}.`
-      })
-      .filter(Boolean)
+        if (!selected) continue
+        lines.push(`• ${c.name} (${isNaN(num) ? '—' : num}/${c.max_score} — ${selected.label}): ${selected.description}.`)
+      }
+    }
     return lines.join('\n')
+  }
+
+  function switchToSession(sessionIdx: number, criterionIdx = 0) {
+    setActiveSessionIdx(sessionIdx)
+    setActiveCriterionIdx(criterionIdx)
+    setHoveredLevelIdx(0)
+    setInRangeMode(false)
+    const nextSession = sessions[sessionIdx]
+    if (!nextSession) return
+    if (!nextSession.criteria[criterionIdx]?.levels?.length) {
+      setTimeout(() => inputRefs.current[criterionIdx]?.focus(), 50)
+    } else {
+      setTimeout(() => panelRef.current?.focus(), 50)
+    }
   }
 
   function advanceCriterion(fromIdx: number) {
     const nextIdx = fromIdx + 1
-    if (nextIdx < criteria.length) {
+    if (nextIdx < activeCriteria.length) {
       setActiveCriterionIdx(nextIdx)
       setHoveredLevelIdx(0)
       setInRangeMode(false)
-      if (!criteria[nextIdx].levels?.length) {
+      if (!activeCriteria[nextIdx].levels?.length) {
         setTimeout(() => inputRefs.current[nextIdx]?.focus(), 0)
       } else {
         panelRef.current?.focus()
       }
     } else {
-      saveCurrentStudent(currentStudent.id).then((ok) => {
-        if (ok && currentStudentIdx < students.length - 1) {
-          setCurrentStudentIdx((i) => i + 1)
-        }
-      })
+      const nextSessionIdx = activeSessionIdx + 1
+      if (nextSessionIdx < sessions.length) {
+        switchToSession(nextSessionIdx, 0)
+      } else {
+        saveCurrentStudent(currentStudent.id).then((ok) => {
+          if (ok && currentStudentIdx < students.length - 1) {
+            setCurrentStudentIdx((i) => i + 1)
+          }
+        })
+      }
     }
   }
 
   function handlePanelKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Escape') { onClose(); return }
 
-    const criterion = criteria[activeCriterionIdx]
+    const criterion = activeCriteria[activeCriterionIdx]
     if (!criterion) return
 
     if (!criterion.levels?.length) {
@@ -197,8 +247,9 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
   }
 
   function getFirstInvalidCriterionIdx(): number {
-    const studentScores = scores[currentStudent?.id] ?? {}
-    return criteria.findIndex((c) => {
+    const columnId = activeSession.column.id
+    const studentScores = scoresRef.current[currentStudent?.id]?.[columnId] ?? {}
+    return activeCriteria.findIndex((c) => {
       const v = parseFloat(studentScores[c.id] ?? '0')
       return !isNaN(v) && v > c.max_score
     })
@@ -208,8 +259,8 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
       const nextCritIdx = criterionIdx + 1
-      if (nextCritIdx < criteria.length) {
-        if (criteria[nextCritIdx].levels?.length) {
+      if (nextCritIdx < activeCriteria.length) {
+        if (activeCriteria[nextCritIdx].levels?.length) {
           setActiveCriterionIdx(nextCritIdx)
           setHoveredLevelIdx(0)
           setInRangeMode(false)
@@ -224,9 +275,7 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
           inputRefs.current[invalidIdx]?.select()
           return
         }
-        saveCurrentStudent(currentStudent.id).then((ok) => {
-          if (ok && currentStudentIdx < students.length - 1) setCurrentStudentIdx((i) => i + 1)
-        })
+        advanceCriterion(criterionIdx)
       }
     }
     if (e.key === 'Escape') onClose()
@@ -234,64 +283,85 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
 
   async function saveCurrentStudent(studentId: string): Promise<boolean> {
     setSaving(true)
-    const studentScores = scores[studentId] ?? {}
-
-    const invalidIdx = criteria.findIndex((c) => {
-      const v = parseFloat(studentScores[c.id] ?? '0')
-      return !isNaN(v) && v > c.max_score
-    })
-    if (invalidIdx !== -1) {
-      inputRefs.current[invalidIdx]?.focus()
-      inputRefs.current[invalidIdx]?.select()
-      setSaving(false)
-      return false
-    }
+    const allSavedGrades: Grade[] = []
+    const allSavedCriterionGrades: CriterionGrade[] = []
 
     try {
-      const gradeRes = await fetch('/api/grades', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, column_id: column.id, score: getTotal(studentId) }),
-      })
-      if (gradeRes.redirected || gradeRes.url.includes('/login')) {
-        alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
-        return false
-      }
-      if (!gradeRes.ok) {
-        alert('Error al guardar la nota. Verifica tu conexión.')
-        return false
-      }
-      const gradeData = await gradeRes.json()
+      for (const session of sessions) {
+        const { column, criteria: sessionCriteria } = session
+        const studentScores = scoresRef.current[studentId]?.[column.id] ?? {}
 
-      if (gradeData.id) {
-        const criterionGradesData = criteria.map((c) => ({
-          criterion_id: c.id,
-          score: parseFloat(studentScores[c.id] ?? '0') || 0,
-        }))
+        // Skip sessions where the user never entered any score (all empty strings)
+        // to avoid overwriting grades that were entered via other methods
+        const hasAnyInput = sessionCriteria.some((c) => studentScores[c.id] !== '' && studentScores[c.id] !== undefined)
+        if (!hasAnyInput) continue
 
-        await fetch('/api/grades/bulk', {
+        const invalidIdx = sessionCriteria.findIndex((c) => {
+          const v = parseFloat(studentScores[c.id] ?? '0')
+          return !isNaN(v) && v > c.max_score
+        })
+        if (invalidIdx !== -1) {
+          const sessionIdx = sessions.indexOf(session)
+          switchToSession(sessionIdx, invalidIdx)
+          setTimeout(() => {
+            inputRefs.current[invalidIdx]?.focus()
+            inputRefs.current[invalidIdx]?.select()
+          }, 100)
+          setSaving(false)
+          return false
+        }
+
+        const total = sessionCriteria.reduce((sum, c) => {
+          const v = parseFloat(studentScores[c.id] ?? '0')
+          return sum + (isNaN(v) ? 0 : v)
+        }, 0)
+
+        const gradeRes = await fetch('/api/grades', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ grade_id: gradeData.id, criterion_grades: criterionGradesData }),
+          body: JSON.stringify({ student_id: studentId, column_id: column.id, score: Math.max(1, total) }),
         })
+        if (gradeRes.redirected || gradeRes.url.includes('/login')) {
+          alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
+          return false
+        }
+        if (!gradeRes.ok) {
+          alert('Error al guardar la nota. Verifica tu conexión.')
+          return false
+        }
+        const gradeData = await gradeRes.json()
 
-        setSaved((prev) => new Set<string>([...Array.from(prev), studentId]))
-
-        // Auto-compose feedback from selected level descriptions
-        const fb = composeFeedback(studentId)
-        if (fb) setFeedbacks((prev) => ({ ...prev, [studentId]: fb }))
-
-        onSave(
-          [gradeData],
-          criteria.map((c, i) => ({
-            id: '',
-            grade_id: gradeData.id,
+        if (gradeData.id) {
+          const criterionGradesData = sessionCriteria.map((c) => ({
             criterion_id: c.id,
-            score: criterionGradesData[i].score,
-            created_at: '',
+            score: parseFloat(studentScores[c.id] ?? '0') || 0,
           }))
-        )
+
+          await fetch('/api/grades/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ grade_id: gradeData.id, criterion_grades: criterionGradesData }),
+          })
+
+          allSavedGrades.push(gradeData)
+          allSavedCriterionGrades.push(
+            ...sessionCriteria.map((c, i) => ({
+              id: '',
+              grade_id: gradeData.id,
+              criterion_id: c.id,
+              score: criterionGradesData[i].score,
+              created_at: '',
+            }))
+          )
+        }
       }
+
+      setSaved((prev) => new Set<string>([...Array.from(prev), studentId]))
+
+      const fb = composeFeedback(studentId)
+      if (fb) setFeedbacks((prev) => ({ ...prev, [studentId]: fb }))
+
+      onSave(allSavedGrades, allSavedCriterionGrades)
       return true
     } catch {
       alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
@@ -310,7 +380,9 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
     onClose()
   }
 
-  if (criteria.length === 0) {
+  const allCriteriaCount = sessions.reduce((sum, s) => sum + s.criteria.length, 0)
+
+  if (allCriteriaCount === 0) {
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
         <div className="bg-white rounded-2xl p-8 max-w-md text-center">
@@ -325,14 +397,16 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
     )
   }
 
-  const hasLevelsCriteria = criteria.some((c) => c.levels?.length)
+  const hasLevelsCriteria = sessions.some((s) => s.criteria.some((c) => c.levels?.length))
 
   return (
     <div className="fixed inset-0 bg-gray-900 z-50 flex">
       {/* Left: student list */}
       <div className="w-72 bg-gray-800 flex flex-col">
         <div className="p-4 border-b border-gray-700">
-          <h2 className="text-white font-bold text-lg">{column.name}</h2>
+          <h2 className="text-white font-bold text-lg">
+            {sessions.length === 1 ? sessions[0].column.name : `${sessions.length} actividades`}
+          </h2>
           <p className="text-gray-400 text-sm mt-1">Calificación por criterios</p>
           {hasLevelsCriteria && (
             <p className="text-gray-500 text-xs mt-1">↑↓ navegar niveles · Enter confirmar</p>
@@ -340,13 +414,19 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
         </div>
         <div className="flex-1 overflow-y-auto">
           {students.map((s, idx) => {
-            const total = getTotal(s.id)
+            const totals = sessions.map(sess => getTotal(s.id, sess.column.id))
+            const anyScore = sessions.some(sess =>
+              Object.values(scores[s.id]?.[sess.column.id] ?? {}).some(v => v !== '')
+            )
+            const allZero = anyScore && totals.every(t => t === 0)
             const isCurrent = idx === currentStudentIdx
             const isDone = saved.has(s.id)
-            const hasScores = scores[s.id]
-              ? Object.values(scores[s.id]).some((v) => v !== '')
-              : false
-            const isZero = hasScores && total === 0
+            const displayScore = sessions.length === 1
+              ? (totals[0] > 0 ? totals[0].toFixed(1) : allZero ? '0.0' : isDone ? '✓' : '—')
+              : totals.some(t => t > 0)
+              ? totals.map(t => t > 0 ? t.toFixed(1) : '—').join(' / ')
+              : isDone ? '✓' : '—'
+
             return (
               <button
                 key={s.id}
@@ -354,16 +434,16 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
                 className={`w-full text-left px-4 py-3 flex items-center justify-between transition-colors ${
                   isCurrent
                     ? 'bg-blue-600 text-white'
-                    : isZero
+                    : allZero
                     ? 'bg-red-900/30 text-gray-200 hover:bg-red-900/50'
-                    : hasScores
+                    : anyScore
                     ? 'bg-emerald-900/40 text-gray-200 hover:bg-emerald-900/60'
                     : 'text-gray-400 hover:bg-gray-700'
                 }`}
               >
                 <span className="text-sm truncate flex-1">{s.name}</span>
-                <span className={`text-sm font-bold ml-2 ${isCurrent ? 'text-white' : isZero ? 'text-red-400' : total > 0 ? 'text-green-400' : 'text-gray-500'}`}>
-                  {total > 0 ? total.toFixed(1) : isZero ? '0.0' : isDone ? '✓' : '—'}
+                <span className={`text-sm font-bold ml-2 ${isCurrent ? 'text-white' : allZero ? 'text-red-400' : anyScore ? 'text-green-400' : 'text-gray-500'}`}>
+                  {displayScore}
                 </span>
               </button>
             )
@@ -405,30 +485,59 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
         onKeyDown={handlePanelKeyDown}
         className="flex-1 flex flex-col bg-white outline-none"
       >
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h3 className="text-xl font-bold text-gray-900">{currentStudent?.name}</h3>
-            <p className="text-sm text-gray-500 mt-0.5">
-              {currentStudentIdx + 1} de {students.length}
-            </p>
-          </div>
-          <div className="text-right">
-            <div className="text-3xl font-bold text-blue-700">
-              {getTotal(currentStudent?.id ?? '').toFixed(1)}
+        <div className="p-6 border-b border-gray-200">
+          {/* Session tabs — only shown when there are multiple sessions */}
+          {sessions.length > 1 && (
+            <div className="flex gap-2 mb-4 flex-wrap">
+              {sessions.map((session, idx) => {
+                const total = getTotal(currentStudent?.id ?? '', session.column.id)
+                const hasAny = Object.values(scores[currentStudent?.id]?.[session.column.id] ?? {}).some(v => v !== '')
+                const isActive = idx === activeSessionIdx
+                return (
+                  <button
+                    key={session.column.id}
+                    onClick={() => switchToSession(idx)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border-2 ${
+                      isActive
+                        ? 'border-blue-500 bg-blue-600 text-white'
+                        : hasAny
+                        ? 'border-green-300 bg-green-50 text-green-700 hover:bg-green-100'
+                        : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >
+                    {session.column.name}
+                    {hasAny && !isActive && <span className="ml-1 text-xs opacity-75">({total.toFixed(1)})</span>}
+                  </button>
+                )
+              })}
             </div>
-            <div className="text-sm text-gray-500">/ 10.0</div>
+          )}
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">{currentStudent?.name}</h3>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {currentStudentIdx + 1} de {students.length}
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-bold text-blue-700">
+                {getActiveTotal(currentStudent?.id ?? '').toFixed(1)}
+              </div>
+              <div className="text-sm text-gray-500">/ {activeSession.column.name}</div>
+            </div>
           </div>
         </div>
 
-        {column.description && (
+        {activeSession.column.description && (
           <div className="mx-6 mt-4 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-blue-800">
-            {column.description}
+            {activeSession.column.description}
           </div>
         )}
 
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {criteria.map((criterion, idx) => {
-            const val = scores[currentStudent?.id]?.[criterion.id] ?? ''
+          {activeCriteria.map((criterion, idx) => {
+            const columnId = activeSession.column.id
+            const val = scores[currentStudent?.id]?.[columnId]?.[criterion.id] ?? ''
             const num = parseFloat(val)
             const hasLevels = !!(criterion.levels?.length)
             const isActive = activeCriterionIdx === idx
@@ -436,7 +545,7 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
             if (hasLevels) {
               return (
                 <div
-                  key={criterion.id}
+                  key={`${columnId}-${criterion.id}`}
                   ref={(el) => { criterionRefs.current[idx] = el }}
                   className={`rounded-xl p-4 border-2 transition-colors cursor-default ${
                     isActive ? 'border-blue-400 bg-blue-50/30' : 'border-transparent bg-gray-50'
@@ -547,7 +656,7 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
 
             return (
               <div
-                key={criterion.id}
+                key={`${columnId}-${criterion.id}`}
                 ref={(el) => { criterionRefs.current[idx] = el }}
                 className={`rounded-xl p-4 border-2 transition-colors ${
                   isActive ? 'border-blue-300 bg-blue-50/20' : 'border-transparent bg-gray-50'
@@ -591,7 +700,6 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
             )
           })}
 
-          {/* Retroalimentación — aparece automáticamente al guardar */}
           {feedbacks[currentStudent?.id] && (
             <div className="border border-gray-200 rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
@@ -606,7 +714,7 @@ export default function QuickGradeMode({ column, criteria, students, grades, cri
               <textarea
                 value={feedbacks[currentStudent.id]}
                 onChange={(e) => setFeedbacks((prev) => ({ ...prev, [currentStudent.id]: e.target.value }))}
-                rows={criteria.filter((c) => c.levels?.length).length + 1}
+                rows={sessions.reduce((sum, s) => sum + s.criteria.filter((c) => c.levels?.length).length, 0) + 1}
                 className="w-full text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none leading-relaxed"
               />
             </div>
