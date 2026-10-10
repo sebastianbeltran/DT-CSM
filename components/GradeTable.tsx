@@ -1359,58 +1359,85 @@ function ColumnPickerModal({
     return col.type === 'sumativa' || (col.type === 'formativa' && cc.length > 0)
   })
 
-  const [selected, setSelected] = useState<Set<string>>(() => new Set([trigger.col.id]))
+  // ordered array of selected column IDs — order = tab order
+  const [selected, setSelected] = useState<string[]>(() => [trigger.col.id])
 
   function toggle(id: string) {
     setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        if (next.size > 1) next.delete(id)
-      } else {
-        next.add(id)
+      if (prev.includes(id)) {
+        if (prev.length > 1) return prev.filter((x) => x !== id)
+        return prev
       }
+      return [...prev, id]
+    })
+  }
+
+  function move(id: string, dir: -1 | 1) {
+    setSelected((prev) => {
+      const idx = prev.indexOf(id)
+      const next = [...prev]
+      const swap = idx + dir
+      if (swap < 0 || swap >= next.length) return prev
+      ;[next[idx], next[swap]] = [next[swap], next[idx]]
       return next
     })
   }
 
   function confirm() {
-    const selectedCols = eligible
-      .filter((col) => selected.has(col.id))
-      .sort((a, b) => a.sort_order - b.sort_order)
-    onConfirm(selectedCols)
+    const colMap = Object.fromEntries(eligible.map((c) => [c.id, c]))
+    onConfirm(selected.map((id) => colMap[id]).filter(Boolean))
   }
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
       <div className="bg-white rounded-2xl p-6 w-96 max-h-[80vh] flex flex-col shadow-2xl">
         <h2 className="text-lg font-bold text-gray-900 mb-1">Calificación rápida</h2>
-        <p className="text-sm text-gray-500 mb-4">Selecciona las actividades a calificar en esta sesión</p>
+        <p className="text-sm text-gray-500 mb-4">Selecciona las actividades y define el orden de las tabs</p>
         <div className="flex-1 overflow-y-auto space-y-2 mb-4">
           {eligible.map((col) => {
-            const isSelected = selected.has(col.id)
+            const pos = selected.indexOf(col.id)
+            const isSelected = pos !== -1
             const isPending = !col.has_grades
             return (
-              <button
+              <div
                 key={col.id}
-                onClick={() => toggle(col.id)}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-colors text-left ${
-                  isSelected
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                className={`flex items-center gap-2 p-3 rounded-xl border-2 transition-colors ${
+                  isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
                 }`}
               >
-                <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-                  isSelected ? 'border-blue-500 bg-blue-500' : 'border-gray-300'
-                }`}>
-                  {isSelected && <span className="text-white text-xs leading-none">✓</span>}
-                </div>
-                <span className="flex-1 text-sm font-medium text-gray-900">{col.name}</span>
-                {isPending && (
-                  <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full whitespace-nowrap">
-                    Pendiente
-                  </span>
+                <button
+                  onClick={() => toggle(col.id)}
+                  className="flex items-center gap-2 flex-1 text-left min-w-0"
+                >
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                    isSelected ? 'border-blue-500 bg-blue-500' : 'border-gray-300'
+                  }`}>
+                    {isSelected
+                      ? <span className="text-white text-xs font-bold leading-none">{pos + 1}</span>
+                      : null}
+                  </div>
+                  <span className="flex-1 text-sm font-medium text-gray-900 truncate">{col.name}</span>
+                  {isPending && (
+                    <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                      Pendiente
+                    </span>
+                  )}
+                </button>
+                {isSelected && (
+                  <div className="flex flex-col gap-0.5 flex-shrink-0">
+                    <button
+                      onClick={() => move(col.id, -1)}
+                      disabled={pos === 0}
+                      className="px-1.5 py-0.5 rounded text-gray-400 hover:text-gray-700 disabled:opacity-20 text-xs leading-none"
+                    >▲</button>
+                    <button
+                      onClick={() => move(col.id, 1)}
+                      disabled={pos === selected.length - 1}
+                      className="px-1.5 py-0.5 rounded text-gray-400 hover:text-gray-700 disabled:opacity-20 text-xs leading-none"
+                    >▼</button>
+                  </div>
                 )}
-              </button>
+              </div>
             )
           })}
         </div>
@@ -1425,7 +1452,7 @@ function ColumnPickerModal({
             onClick={confirm}
             className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors"
           >
-            Comenzar ({selected.size})
+            Comenzar ({selected.length})
           </button>
         </div>
       </div>
