@@ -41,8 +41,35 @@ async function findOrCreatePeriodCompetency(
   return data?.id ?? null
 }
 
-async function copyColumn(sourceCol: Record<string, unknown>, targetPeriodId: string, competencyKey: string | null) {
-  // Check if column with same name already exists
+async function copyCriteria(sourceColumnId: string, targetColumnId: string): Promise<boolean> {
+  const { data: srcCriteria } = await supabase
+    .from('criteria')
+    .select('*')
+    .eq('column_id', sourceColumnId)
+    .order('sort_order')
+
+  if (!srcCriteria?.length) return true
+
+  await supabase.from('criteria').delete().eq('column_id', targetColumnId)
+
+  const { error } = await supabase.from('criteria').insert(
+    srcCriteria.map((c) => ({
+      column_id: targetColumnId,
+      name: c.name,
+      max_score: c.max_score,
+      sort_order: c.sort_order,
+      levels: c.levels ?? null,
+    }))
+  )
+  return !error
+}
+
+// Returns { created: 0|1, skipped: 0|1 }
+async function copyColumn(
+  sourceCol: Record<string, unknown>,
+  targetPeriodId: string,
+  competencyKey: string | null
+): Promise<{ created: number; skipped: number }> {
   const query = supabase
     .from('grade_columns')
     .select('id, has_grades')
@@ -54,19 +81,14 @@ async function copyColumn(sourceCol: Record<string, unknown>, targetPeriodId: st
     : await query.is('competency_key', null).single()
 
   if (existing) {
-    // Update description if no grades yet
     if (!existing.has_grades) {
       await supabase.from('grade_columns').update({ description: sourceCol.description }).eq('id', existing.id)
-      // Replace criteria
-      const { data: srcCriteria } = await supabase.from('criteria').select('*').eq('column_id', sourceCol.id as string).order('sort_order')
-      if (srcCriteria?.length) {
-        await supabase.from('criteria').delete().eq('column_id', existing.id)
-        await supabase.from('criteria').insert(
-          srcCriteria.map((c) => ({ column_id: existing.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order, levels: c.levels ?? null }))
-        )
-      }
+      await copyCriteria(sourceCol.id as string, existing.id)
+    } else {
+      // Column has grades — criteria cannot be updated to avoid losing grade data
+      return { created: 0, skipped: 1 }
     }
-    return 0
+    return { created: 0, skipped: 0 }
   }
 
   const { data: newCol } = await supabase
@@ -84,14 +106,10 @@ async function copyColumn(sourceCol: Record<string, unknown>, targetPeriodId: st
     .single()
 
   if (newCol) {
-    const { data: srcCriteria } = await supabase.from('criteria').select('*').eq('column_id', sourceCol.id as string).order('sort_order')
-    if (srcCriteria?.length) {
-      await supabase.from('criteria').insert(
-        srcCriteria.map((c) => ({ column_id: newCol.id, name: c.name, max_score: c.max_score, sort_order: c.sort_order, levels: c.levels ?? null }))
-      )
-    }
+    await copyCriteria(sourceCol.id as string, newCol.id)
   }
-  return 1
+
+  return { created: newCol ? 1 : 0, skipped: 0 }
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
@@ -117,11 +135,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       .from('grade_columns').select('*').eq('period_id', sourcePeriodId).eq('competency_key', competencyKey).order('sort_order')
 
     let copied = 0
+    let skipped = 0
     for (const col of sourceCols ?? []) {
-      copied += await copyColumn(col, targetPeriodId, competencyKey)
+      const result = await copyColumn(col, targetPeriodId, competencyKey)
+      copied += result.created
+      skipped += result.skipped
     }
 
-    return NextResponse.json({ ok: true, columnsAdded: copied })
+    return NextResponse.json({ ok: true, columnsAdded: copied, columnsSkipped: skipped })
   }
 
   // ── Full course copy ──
@@ -129,7 +150,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const { data: sourcePeriods } = await supabase.from('periods').select('*').eq('course_id', sourceCourseId).order('sort_order')
     if (!sourcePeriods?.length) return NextResponse.json({ error: 'El curso origen no tiene periodos' }, { status: 400 })
 
-    let totalColumns = 0
+    let totalCreated = 0
+    let totalSkipped = 0
 
     for (const period of sourcePeriods) {
       const targetPeriodId = await findOrCreatePeriod(targetCourseId, period.name, period.sort_order, period.grade_weights, period.bonus_cap)
@@ -146,19 +168,24 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         const { data: sourceCols } = await supabase
           .from('grade_columns').select('*').eq('period_id', period.id).eq('competency_key', pc.competency_key).order('sort_order')
         for (const col of sourceCols ?? []) {
-          totalColumns += await copyColumn(col, targetPeriodId, pc.competency_key)
+          const result = await copyColumn(col, targetPeriodId, pc.competency_key)
+          totalCreated += result.created
+          totalSkipped += result.skipped
         }
       }
 
-      // Copy bonus columns (no competency)
-      const { data: bonusCols } = await supabase
-        .from('grade_columns').select('*').eq('period_id', period.id).is('competency_key', null).eq('type', 'bonus')
-      for (const col of bonusCols ?? []) {
-        totalColumns += await copyColumn(col, targetPeriodId, null)
+      // Copy bonus and entrega columns (no competency)
+      const { data: nullCompCols } = await supabase
+        .from('grade_columns').select('*').eq('period_id', period.id).is('competency_key', null)
+        .in('type', ['bonus', 'entrega'])
+      for (const col of nullCompCols ?? []) {
+        const result = await copyColumn(col, targetPeriodId, null)
+        totalCreated += result.created
+        totalSkipped += result.skipped
       }
     }
 
-    return NextResponse.json({ ok: true, columnsAdded: totalColumns })
+    return NextResponse.json({ ok: true, columnsAdded: totalCreated, columnsSkipped: totalSkipped })
   }
 
   return NextResponse.json({ error: 'Parámetros inválidos' }, { status: 400 })

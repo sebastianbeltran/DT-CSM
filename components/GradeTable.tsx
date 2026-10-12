@@ -993,7 +993,8 @@ function CopyCompetencyButton({
         body: JSON.stringify({ sourcePeriodId: periodId, competencyKey }),
       })
       const data = await res.json()
-      setResults((prev) => ({ ...prev, [targetId]: res.ok ? `✓ ${data.columnsAdded} eval.` : '✗ Error' }))
+      const skippedNote = res.ok && data.columnsSkipped > 0 ? ` (${data.columnsSkipped} con notas, editar manual)` : ''
+      setResults((prev) => ({ ...prev, [targetId]: res.ok ? `✓ ${data.columnsAdded} eval.${skippedNote}` : '✗ Error' }))
     } catch {
       setResults((prev) => ({ ...prev, [targetId]: '✗ Sin conexión' }))
     } finally {
@@ -1073,8 +1074,23 @@ function ColumnHeader({
   onGroupGrade: () => void
   onExport: () => void
 }) {
+  const [copied, setCopied] = useState(false)
   const typeColor = col.type === 'formativa' ? 'text-green-700 bg-green-50' :
     col.type === 'sumativa' ? 'text-blue-700 bg-blue-50' : 'text-purple-700 bg-purple-50'
+
+  function copyCriteriaJson() {
+    const json = JSON.stringify({
+      criteria: criteria.map((c) => ({
+        name: c.name,
+        points_available: c.max_score,
+        ...(c.levels?.length ? { levels: c.levels } : {}),
+      })),
+    }, null, 2)
+    navigator.clipboard.writeText(json).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
 
   return (
     <th className={`relative px-1 py-1.5 text-center border-r border-gray-200 group ${typeColor}`}>
@@ -1105,6 +1121,15 @@ function ColumnHeader({
       <div className="absolute top-1 right-0.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         {hasGroups && (
           <button onClick={onGroupGrade} className="text-gray-400 hover:text-blue-600 text-xs" title="Calificar por grupo">👥</button>
+        )}
+        {criteria.length > 0 && (
+          <button
+            onClick={copyCriteriaJson}
+            className={`text-xs transition-colors ${copied ? 'text-green-500' : 'text-gray-400 hover:text-purple-600'}`}
+            title="Copiar criterios como JSON"
+          >
+            {copied ? '✓' : '{}'}
+          </button>
         )}
         <button onClick={onExport} className="text-gray-400 hover:text-green-600 text-xs" title="Exportar notas a Excel">↓</button>
         <button onClick={onEdit} className="text-gray-400 hover:text-blue-600 text-xs" title="Editar">✎</button>

@@ -493,7 +493,10 @@ function CopyStructureModal({
       })
       const data = await res.json()
       if (res.ok) {
-        alert(`✓ Estructura copiada: ${data.columnsAdded} evaluación(es) añadida(s).`)
+        const skippedNote = data.columnsSkipped > 0
+          ? `\n\n⚠️ ${data.columnsSkipped} evaluación(es) ya tenían notas y no se actualizaron — edítalas manualmente para ajustar sus criterios.`
+          : ''
+        alert(`✓ Estructura copiada: ${data.columnsAdded} evaluación(es) añadida(s).${skippedNote}`)
         onClose()
         window.location.reload()
       } else {
