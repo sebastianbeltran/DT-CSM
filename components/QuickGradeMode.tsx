@@ -422,11 +422,21 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
             const allZero = anyScore && totals.every(t => t === 0)
             const isCurrent = idx === currentStudentIdx
             const isDone = saved.has(s.id)
+
+            // Fallback: show grade.score when criterion_grades are missing
+            // (e.g. graded before criteria existed, or criteria were replaced)
+            const fallbackScores = !anyScore && !isDone
+              ? sessions.map(sess => grades.find(g => g.student_id === s.id && g.column_id === sess.column.id)?.score ?? null)
+              : null
+            const hasFallback = fallbackScores?.some(v => v !== null) ?? false
+
             const displayScore = sessions.length === 1
-              ? (sessionHasScore[0] ? totals[0].toFixed(1) : isDone ? '✓' : '—')
+              ? (sessionHasScore[0] ? totals[0].toFixed(1) : isDone ? '✓' : hasFallback ? `${fallbackScores![0]?.toFixed(1)}` : '—')
               : anyScore
               ? totals.map((t, i) => sessionHasScore[i] ? t.toFixed(1) : '—').join(' / ')
-              : isDone ? '✓' : '—'
+              : isDone ? '✓' : hasFallback
+              ? fallbackScores!.map(v => v !== null ? v.toFixed(1) : '—').join(' / ')
+              : '—'
 
             return (
               <button
@@ -439,11 +449,13 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
                     ? 'bg-red-900/30 text-gray-200 hover:bg-red-900/50'
                     : anyScore
                     ? 'bg-emerald-900/40 text-gray-200 hover:bg-emerald-900/60'
+                    : hasFallback
+                    ? 'bg-yellow-900/30 text-gray-300 hover:bg-yellow-900/50'
                     : 'text-gray-400 hover:bg-gray-700'
                 }`}
               >
                 <span className="text-sm truncate flex-1">{s.name}</span>
-                <span className={`text-sm font-bold ml-2 ${isCurrent ? 'text-white' : allZero ? 'text-red-400' : anyScore ? 'text-green-400' : 'text-gray-500'}`}>
+                <span className={`text-sm font-bold ml-2 ${isCurrent ? 'text-white' : allZero ? 'text-red-400' : anyScore ? 'text-green-400' : hasFallback ? 'text-yellow-400' : 'text-gray-500'}`}>
                   {displayScore}
                 </span>
               </button>
