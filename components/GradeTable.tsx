@@ -62,6 +62,9 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const headerRow1Ref = useRef<HTMLTableRowElement>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortByGrade, setSortByGrade] = useState<'asc' | 'desc' | null>(null)
+  const [copiedClaude, setCopiedClaude] = useState(false)
+  const [claudeThreshold, setClaudeThreshold] = useState(6.5)
+  const [claudeScope, setClaudeScope] = useState<'global' | string>('global')
   const [showArchived, setShowArchived] = useState(false)
 
   const [weights, setWeights] = useState(period.grade_weights ?? course.grade_weights ?? { formativa: 40, sumativa: 60 })
@@ -311,6 +314,108 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
   const atRisk = sortedStudents.filter((s) => s.finalGrade !== null && s.finalGrade < 6.5)
 
+  function copyForClaude() {
+    const date = new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })
+    const lines: string[] = []
+    lines.push('REPORTE DE ESTUDIANTES CON BAJO RENDIMIENTO')
+    lines.push(`Curso: ${course.name} | Período: ${period.name}`)
+    lines.push(`Fecha: ${date}`)
+    lines.push('')
+
+    if (claudeScope === 'global') {
+      const below = studentsWithGrades.filter((s) => s.finalGrade !== null && s.finalGrade < claudeThreshold)
+      const noGrade = studentsWithGrades.filter((s) => s.finalGrade === null)
+      if (below.length === 0 && noGrade.length === 0) {
+        alert(`No hay estudiantes sin nota ni con nota final menor a ${claudeThreshold}.`); return
+      }
+      if (below.length > 0) {
+        lines.push(`Estudiantes con nota final del trimestre menor a ${claudeThreshold} (escala 1–10):`)
+        lines.push('')
+        below.forEach((s, i) => {
+          lines.push(`${i + 1}. ${s.name} — Nota final: ${s.finalGrade!.toFixed(1)}`)
+          for (const pc of periodCompetencies) {
+            const g = s.competencyGrades[pc.competency_key]
+            const label = COMPETENCIES[pc.competency_key as CompetencyKey]?.short ?? pc.competency_key
+            lines.push(`   • ${label}: ${g !== null && g !== undefined ? g.toFixed(1) : 'Sin nota'}`)
+          }
+          lines.push('')
+        })
+      }
+      if (noGrade.length > 0) {
+        lines.push('Sin nota registrada (sin portafolio u otras causas):')
+        lines.push('')
+        noGrade.forEach((s, i) => lines.push(`${i + 1}. ${s.name}`))
+        lines.push('')
+      }
+      lines.push(`Total alertas: ${below.length + noGrade.length} de ${localStudents.length} estudiantes.`)
+
+    } else if (periodCompetencies.some((pc) => pc.competency_key === claudeScope)) {
+      const pc = periodCompetencies.find((p) => p.competency_key === claudeScope)!
+      const label = COMPETENCIES[pc.competency_key as CompetencyKey]?.short ?? pc.competency_key
+      const below = studentsWithGrades.filter((s) => {
+        const g = s.competencyGrades[pc.competency_key]
+        return g !== null && g !== undefined && g < claudeThreshold
+      })
+      const noGrade = studentsWithGrades.filter((s) => {
+        const g = s.competencyGrades[pc.competency_key]
+        return g === null || g === undefined
+      })
+      if (below.length === 0 && noGrade.length === 0) {
+        alert(`No hay estudiantes sin nota ni con nota en ${label} menor a ${claudeThreshold}.`); return
+      }
+      lines.push(`Filtro: competencia ${label}`)
+      lines.push('')
+      if (below.length > 0) {
+        lines.push(`Estudiantes con nota en ${label} menor a ${claudeThreshold}:`)
+        lines.push('')
+        below.forEach((s, i) => {
+          const g = s.competencyGrades[pc.competency_key]!
+          lines.push(`${i + 1}. ${s.name} — ${label}: ${g.toFixed(1)} | Nota final: ${s.finalGrade !== null ? s.finalGrade.toFixed(1) : 'Sin nota'}`)
+        })
+        lines.push('')
+      }
+      if (noGrade.length > 0) {
+        lines.push(`Sin nota en ${label}:`)
+        noGrade.forEach((s, i) => lines.push(`${i + 1}. ${s.name}`))
+        lines.push('')
+      }
+      lines.push(`Total alertas: ${below.length + noGrade.length} de ${localStudents.length} estudiantes.`)
+
+    } else {
+      const col = columns.find((c) => c.id === claudeScope)
+      if (!col) { alert('Selecciona una evaluación válida.'); return }
+      const below = studentsWithGrades.filter((s) => {
+        const score = getStudentScore(s.id, col, grades, criterionGrades)
+        return score !== null && score < claudeThreshold
+      })
+      const noGrade = studentsWithGrades.filter((s) => getStudentScore(s.id, col, grades, criterionGrades) === null)
+      if (below.length === 0 && noGrade.length === 0) {
+        alert(`No hay estudiantes sin nota ni con nota en "${col.name}" menor a ${claudeThreshold}.`); return
+      }
+      lines.push(`Filtro: evaluación "${col.name}"`)
+      lines.push('')
+      if (below.length > 0) {
+        lines.push(`Estudiantes con nota en "${col.name}" menor a ${claudeThreshold}:`)
+        lines.push('')
+        below.forEach((s, i) => {
+          const score = getStudentScore(s.id, col, grades, criterionGrades)!
+          lines.push(`${i + 1}. ${s.name} — ${col.name}: ${score.toFixed(1)} | Nota final: ${s.finalGrade !== null ? s.finalGrade.toFixed(1) : 'Sin nota'}`)
+        })
+        lines.push('')
+      }
+      if (noGrade.length > 0) {
+        lines.push(`Sin nota en "${col.name}" (no entregaron o sin acceso):`)
+        noGrade.forEach((s, i) => lines.push(`${i + 1}. ${s.name}`))
+        lines.push('')
+      }
+      lines.push(`Total alertas: ${below.length + noGrade.length} de ${localStudents.length} estudiantes.`)
+    }
+
+    navigator.clipboard.writeText(lines.join('\n'))
+      .then(() => { setCopiedClaude(true); setTimeout(() => setCopiedClaude(false), 2500) })
+      .catch(() => alert('No se pudo copiar al portapapeles. Inténtalo de nuevo.'))
+  }
+
   function exportColumn(col: GradeColumn) {
     const header = ['Estudiante', col.name]
     const rows = localStudents.map((student) => {
@@ -399,6 +504,52 @@ export default function GradeTable({ course, period, students, initialGroups, on
             {atRisk.length} en riesgo
           </span>
         )}
+
+        <div className="flex items-center border border-gray-300 bg-white rounded-lg overflow-hidden text-sm">
+          <select
+            value={claudeScope}
+            onChange={(e) => setClaudeScope(e.target.value)}
+            className="py-1.5 pl-2 pr-1 focus:outline-none bg-transparent text-gray-700 max-w-[140px]"
+          >
+            <option value="global">Nota global</option>
+            {periodCompetencies.length > 0 && (
+              <optgroup label="Competencia">
+                {periodCompetencies.map((pc) => (
+                  <option key={pc.competency_key} value={pc.competency_key}>
+                    {COMPETENCIES[pc.competency_key as CompetencyKey]?.short ?? pc.competency_key}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {columns.filter((c) => c.type !== 'entrega').length > 0 && (
+              <optgroup label="Evaluación">
+                {columns.filter((c) => c.type !== 'entrega').map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          <span className="text-xs text-gray-400 px-1">&lt;</span>
+          <input
+            type="number"
+            min={1}
+            max={10}
+            step={0.5}
+            value={claudeThreshold}
+            onChange={(e) => setClaudeThreshold(Number(e.target.value))}
+            className="w-10 text-center py-1.5 focus:outline-none"
+          />
+          <button
+            onClick={copyForClaude}
+            className={`px-3 py-1.5 border-l transition-colors flex items-center gap-1.5 ${
+              copiedClaude
+                ? 'bg-green-50 border-green-300 text-green-700'
+                : 'border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            {copiedClaude ? '✓ ¡Copiado!' : '✦ Copiar para Claude'}
+          </button>
+        </div>
 
         <div className="ml-auto flex items-center gap-2">
           <WeightsEditor
