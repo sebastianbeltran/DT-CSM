@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import * as XLSX from 'xlsx'
-import { computePeriodFinalFromCompetencies, computeCompetencyGrade, getStudentScore } from '@/lib/calculations'
+import { computePeriodFinalFromCompetencies, computeCompetencyGrade, getStudentScore, getBonusPlacement, getScoreWithBonus } from '@/lib/calculations'
 import type { PeriodCompetency } from '@/lib/types'
 
 export async function GET(req: Request) {
@@ -65,11 +65,13 @@ export async function GET(req: Request) {
 
   const rows = students.map((student) => {
     const row: (string | number)[] = [student.name]
+    // El bono va sumado dentro de la evaluación más baja
+    const placement = getBonusPlacement(student.id, allColumns as any, grades ?? [], criterionGrades ?? [], bonusCap)
 
     for (const pc of allPeriodCompetencies) {
       const pcCols = allColumns.filter((c) => c.competency_key === pc.competency_key)
       for (const col of pcCols) {
-        const score = getStudentScore(student.id, col as any, grades ?? [], criterionGrades ?? [])
+        const score = getScoreWithBonus(student.id, col as any, grades ?? [], criterionGrades ?? [], placement)
         row.push(score ?? '')
       }
       const compGrade = computeCompetencyGrade(student.id, pc.competency_key, allColumns, grades ?? [], criterionGrades ?? [], weights, bonusCap)

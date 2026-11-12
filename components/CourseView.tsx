@@ -7,6 +7,8 @@ import type { Course, Student, Period, WorkGroup, PeriodCompetency } from '@/lib
 import type { ParsedSabana } from '@/lib/competencies'
 import { COMPETENCIES } from '@/lib/competencies'
 import GradeTable from './GradeTable'
+import PhidiasExportModal from './PhidiasExportModal'
+import PhidiasCompareModal from './PhidiasCompareModal'
 
 interface CourseViewProps {
   course: Course & { school_years?: { name: string } }
@@ -22,6 +24,9 @@ export default function CourseView({ course, initialStudents, initialPeriods, in
   const [activePeriodId, setActivePeriodId] = useState<string>(initialPeriods[0]?.id ?? '')
   const [showPeriodModal, setShowPeriodModal] = useState(false)
   const [showCopyModal, setShowCopyModal] = useState(false)
+  const [showPhidiasModal, setShowPhidiasModal] = useState(false)
+  const [showPhidiasCompare, setShowPhidiasCompare] = useState(false)
+  const [gradeTableKey, setGradeTableKey] = useState(0)
 
   async function createPeriod(name: string, competencies: ParsedSabana['competencies']) {
     try {
@@ -130,6 +135,20 @@ export default function CourseView({ course, initialStudents, initialPeriods, in
           Exportar Informes
         </a>
         <button
+          onClick={() => setShowPhidiasModal(true)}
+          disabled={periods.length === 0}
+          className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+        >
+          Exportar a Phidias
+        </button>
+        <button
+          onClick={() => setShowPhidiasCompare(true)}
+          disabled={periods.length === 0}
+          className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+        >
+          Comparar con Phidias
+        </button>
+        <button
           onClick={() => setShowCopyModal(true)}
           className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
         >
@@ -161,6 +180,7 @@ export default function CourseView({ course, initialStudents, initialPeriods, in
       {/* Grade table */}
       {activePeriod ? (
         <GradeTable
+          key={gradeTableKey}
           course={course}
           period={activePeriod}
           students={students}
@@ -187,6 +207,27 @@ export default function CourseView({ course, initialStudents, initialPeriods, in
           defaultName={`Trimestre ${periods.length + 1}`}
           onConfirm={createPeriod}
           onClose={() => setShowPeriodModal(false)}
+        />
+      )}
+
+      {showPhidiasCompare && (
+        <PhidiasCompareModal
+          courseId={course.id}
+          courseName={course.name}
+          periods={periods}
+          initialPeriodId={activePeriodId}
+          onClose={() => setShowPhidiasCompare(false)}
+          onApplied={() => setGradeTableKey((k) => k + 1)}
+        />
+      )}
+
+      {showPhidiasModal && (
+        <PhidiasExportModal
+          courseId={course.id}
+          courseName={course.name}
+          periods={periods}
+          initialPeriodId={activePeriodId}
+          onClose={() => setShowPhidiasModal(false)}
         />
       )}
 

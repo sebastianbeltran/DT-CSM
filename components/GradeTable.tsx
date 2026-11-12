@@ -9,7 +9,8 @@ import { COMPETENCIES } from '@/lib/competencies'
 import {
   computePeriodFinalFromCompetencies,
   computeCompetencyGradesWithBonus,
-  getBonusRecipientKey,
+  getBonusPlacement,
+  type BonusPlacement,
   getStudentScore,
   getColorForGrade,
 } from '@/lib/calculations'
@@ -194,7 +195,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
       const res = await fetch('/api/grades', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, column_id: columnId, score: columns.find(c => c.id === columnId)?.type === 'entrega' ? score : Math.max(1, score) }),
+        body: JSON.stringify({ student_id: studentId, column_id: columnId, score: columns.find(c => c.id === columnId)?.type === 'entrega' ? score : Math.max(1, score), clear_phidias: true }),
       })
       if (!res.ok) { console.error('Grade save failed', res.status); return }
       const data = await res.json()
@@ -301,7 +302,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
     ...s,
     finalGrade: computePeriodFinalFromCompetencies(s.id, periodCompetencies, columns, grades, criterionGrades, weights, bonusCap),
     competencyGrades: computeCompetencyGradesWithBonus(s.id, periodCompetencies, columns, grades, criterionGrades, weights, bonusCap),
-    bonusRecipientKey: getBonusRecipientKey(s.id, periodCompetencies, columns, grades, criterionGrades, weights),
+    bonusPlacement: getBonusPlacement(s.id, columns, grades, criterionGrades, bonusCap),
   }))
 
   const sortedStudents = sortByGrade
@@ -798,6 +799,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                                 grades={grades}
                                 criterionGrades={criterionGrades}
                                 criteria={colCriteria}
+                                bonus={student.bonusPlacement?.columnId === col.id ? student.bonusPlacement : null}
                                 onSave={saveGrade}
                                 onOpenQuickGrade={() => openQuickGrade(col, student.id)}
                               />
@@ -808,14 +810,6 @@ export default function GradeTable({ course, period, students, initialGroups, on
                           <span className={`text-sm font-bold ${compGrade !== null ? meta.textColor : 'text-gray-300'}`}>
                             {compGrade !== null ? compGrade.toFixed(1) : '—'}
                           </span>
-                          {student.bonusRecipientKey === pc.competency_key && (
-                            <span
-                              className="ml-1 text-xs text-amber-600 font-bold"
-                              title="Bonus aplicado a esta competencia (era la más baja)"
-                            >
-                              ↑
-                            </span>
-                          )}
                         </td>
                       </Fragment>
                     )
@@ -1299,6 +1293,7 @@ function GradeCell({
   grades,
   criterionGrades,
   criteria,
+  bonus = null,
   onSave,
   onOpenQuickGrade,
 }: {
@@ -1308,6 +1303,7 @@ function GradeCell({
   grades: Grade[]
   criterionGrades: CriterionGrade[]
   criteria: Criterion[]
+  bonus?: BonusPlacement | null
   onSave: (studentId: string, columnId: string, score: number | null) => Promise<void>
   onOpenQuickGrade: () => void
 }) {
@@ -1334,10 +1330,14 @@ function GradeCell({
         title={hasCriteria ? 'Click para calificar por rúbrica' : 'Definir criterios primero'}
       >
         <span className={`text-sm ${isZero ? 'text-red-500 font-bold' : score !== null ? 'text-gray-800 font-medium' : 'text-gray-300'}`}>
-          {score !== null ? score.toFixed(1) : hasCriteria ? '·' : '—'}
+          {score !== null ? (bonus ? Math.min(10, score + bonus.points) : score).toFixed(1) : hasCriteria ? '·' : '—'}
         </span>
+        {bonus && score !== null && <BonusMark score={score} bonus={bonus} />}
         {grade?.is_manually_adjusted && (
           <span className="ml-0.5 text-xs text-orange-500" title="Nota ajustada individualmente">*</span>
+        )}
+        {grade?.phidias_score != null && (
+          <span className="ml-0.5 text-[10px] font-bold text-purple-600" title="Nota por ajuste con Phidias (versión final aceptada; incluye el bono, si aplica)">P</span>
         )}
       </td>
     )
@@ -1408,7 +1408,20 @@ function GradeCell({
           placeholder="·"
         />
       )}
+      {bonus && score !== null && <BonusMark score={score} bonus={bonus} />}
     </td>
+  )
+}
+
+function BonusMark({ score, bonus }: { score: number; bonus: BonusPlacement }) {
+  const total = Math.min(10, score + bonus.points)
+  return (
+    <span
+      className="ml-0.5 text-[10px] font-bold text-amber-600"
+      title={`Bono aplicado aquí (era la nota más baja): ${score.toFixed(1)} + ${bonus.points.toFixed(2)} = ${total.toFixed(1)}`}
+    >
+      B
+    </span>
   )
 }
 

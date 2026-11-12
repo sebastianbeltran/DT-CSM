@@ -19,6 +19,11 @@ export function getStudentScore(
   )
   if (!grade) return null
 
+  // Ajuste con Phidias: la nota elegida manda; la rúbrica se conserva intacta.
+  if (grade.phidias_score !== null && grade.phidias_score !== undefined) {
+    return Number(grade.phidias_score)
+  }
+
   let score: number | null = null
 
   if (column.type === 'sumativa' || column.type === 'bonus') {
@@ -37,22 +42,85 @@ export function getStudentScore(
   return Math.max(1, score)
 }
 
-// Calculates weighted grade for a set of columns (used per-competency and for bonus)
+// ─── Bono ────────────────────────────────────────────────────────────────────
+// El bono global (columnas bonus/entrega sin competencia, ej. "Diagnostic Test") se suma
+// a la EVALUACIÓN con la nota más baja del estudiante, no a una competencia.
+
+export interface BonusPlacement {
+  columnId: string
+  points: number // puntos que se suman
+  baseScore: number // nota de la evaluación antes del bono
+}
+
+const isGlobalBonus = (c: GradeColumn) => (c.type === 'bonus' || c.type === 'entrega') && !c.competency_key
+
+export function getBonusPlacement(
+  studentId: string,
+  columns: GradeColumn[],
+  grades: Grade[],
+  criterionGrades: CriterionGrade[],
+  bonusCap: number
+): BonusPlacement | null {
+  const bonusScores = columns
+    .filter(isGlobalBonus)
+    .map((c) => getStudentScore(studentId, c, grades, criterionGrades))
+    .filter((s): s is number => s !== null)
+  if (bonusScores.length === 0 || !(bonusCap > 0)) return null
+
+  // Si el estudiante ya tiene una nota ajustada con Phidias en el periodo, esa nota es la
+  // versión final aceptada y ya incluye el bono: no se vuelve a sumar.
+  const periodColumnIds = new Set(columns.map((c) => c.id))
+  const hasPhidiasAdjustment = grades.some(
+    (g) => g.student_id === studentId && periodColumnIds.has(g.column_id) && g.phidias_score != null
+  )
+  if (hasPhidiasAdjustment) return null
+
+  const avg = bonusScores.reduce((a, b) => a + b, 0) / bonusScores.length
+  const points = Math.round((avg / 10) * bonusCap * 100) / 100
+  if (points <= 0) return null
+
+  // Evaluación más baja entre las de competencias (empate: la primera en orden)
+  let best: BonusPlacement | null = null
+  for (const c of columns) {
+    if (!c.competency_key || (c.type !== 'formativa' && c.type !== 'sumativa')) continue
+    const s = getStudentScore(studentId, c, grades, criterionGrades)
+    if (s === null) continue
+    if (!best || s < best.baseScore) best = { columnId: c.id, points, baseScore: s }
+  }
+  return best
+}
+
+/** Nota de la evaluación incluyendo el bono si esta es la que lo recibe (máx. 10). */
+export function getScoreWithBonus(
+  studentId: string,
+  column: GradeColumn,
+  grades: Grade[],
+  criterionGrades: CriterionGrade[],
+  placement: BonusPlacement | null
+): number | null {
+  const s = getStudentScore(studentId, column, grades, criterionGrades)
+  if (s === null || !placement || placement.columnId !== column.id) return s
+  return Math.min(10, Math.round((s + placement.points) * 100) / 100)
+}
+
+// Calculates weighted grade for a set of columns (used per-competency)
 export function computeWeightedGrade(
   studentId: string,
   columns: GradeColumn[],
   grades: Grade[],
   criterionGrades: CriterionGrade[],
   weights: { formativa: number; sumativa: number },
-  bonusCap: number
+  bonusCap: number,
+  placement: BonusPlacement | null = null
 ): number | null {
   const formativas = columns.filter((c) => c.type === 'formativa')
   const sumativas = columns.filter((c) => c.type === 'sumativa')
-  const bonuses = columns.filter((c) => c.type === 'bonus' || c.type === 'entrega')
+  // Bonos propios de una competencia (el bono global va por `placement`)
+  const bonuses = columns.filter((c) => (c.type === 'bonus' || c.type === 'entrega') && c.competency_key)
 
   const avgGroup = (cols: GradeColumn[]) => {
     const scores = cols
-      .map((c) => getStudentScore(studentId, c, grades, criterionGrades))
+      .map((c) => getScoreWithBonus(studentId, c, grades, criterionGrades, placement))
       .filter((s): s is number => s !== null)
     if (scores.length === 0) return null
     return scores.reduce((a, b) => a + b, 0) / scores.length
@@ -100,10 +168,11 @@ export function computePeriodFinal(
   weights: { formativa: number; sumativa: number },
   bonusCap: number
 ): number | null {
-  return computeWeightedGrade(studentId, columns, grades, criterionGrades, weights, bonusCap)
+  const placement = getBonusPlacement(studentId, columns, grades, criterionGrades, bonusCap)
+  return computeWeightedGrade(studentId, columns, grades, criterionGrades, weights, bonusCap, placement)
 }
 
-// Grade for a single competency (its columns only)
+// Grade for a single competency. `columns` = todas las del periodo (para ubicar el bono).
 export function computeCompetencyGrade(
   studentId: string,
   competencyKey: string,
@@ -115,10 +184,11 @@ export function computeCompetencyGrade(
 ): number | null {
   const cols = columns.filter(c => c.competency_key === competencyKey)
   if (cols.length === 0) return null
-  return computeWeightedGrade(studentId, cols, grades, criterionGrades, weights, bonusCap)
+  const placement = getBonusPlacement(studentId, columns, grades, criterionGrades, bonusCap)
+  return computeWeightedGrade(studentId, cols, grades, criterionGrades, weights, bonusCap, placement)
 }
 
-// Returns per-competency grades with bonus applied only to the lowest one
+// Per-competency grades; el bono ya va dentro de la evaluación más baja
 export function computeCompetencyGradesWithBonus(
   studentId: string,
   periodCompetencies: PeriodCompetency[],
@@ -128,44 +198,18 @@ export function computeCompetencyGradesWithBonus(
   weights: { formativa: number; sumativa: number },
   bonusCap: number
 ): Record<string, number | null> {
-  const bonusColumns = columns.filter(c => (c.type === 'bonus' || c.type === 'entrega') && !c.competency_key)
-
-  // First pass: grades without bonus
-  const baseGrades: Record<string, number | null> = {}
-  for (const pc of periodCompetencies) {
-    const pcCols = columns.filter(c => c.competency_key === pc.competency_key)
-    baseGrades[pc.competency_key] = computeWeightedGrade(
-      studentId, pcCols, grades, criterionGrades, weights, 0
-    )
-  }
-
-  // Find the competency with the lowest grade (only among those with a grade)
-  let lowestKey: string | null = null
-  let lowestGrade = Infinity
-  for (const pc of periodCompetencies) {
-    const g = baseGrades[pc.competency_key]
-    if (g !== null && g < lowestGrade) { lowestGrade = g; lowestKey = pc.competency_key }
-  }
-
-  // Second pass: add bonus only to the lowest
+  const placement = getBonusPlacement(studentId, columns, grades, criterionGrades, bonusCap)
   const result: Record<string, number | null> = {}
   for (const pc of periodCompetencies) {
-    if (pc.competency_key === lowestKey && bonusColumns.length > 0) {
-      const pcCols = [
-        ...columns.filter(c => c.competency_key === pc.competency_key),
-        ...bonusColumns,
-      ]
-      result[pc.competency_key] = computeWeightedGrade(
-        studentId, pcCols, grades, criterionGrades, weights, bonusCap
-      )
-    } else {
-      result[pc.competency_key] = baseGrades[pc.competency_key]
-    }
+    const pcCols = columns.filter(c => c.competency_key === pc.competency_key)
+    result[pc.competency_key] = computeWeightedGrade(
+      studentId, pcCols, grades, criterionGrades, weights, bonusCap, placement
+    )
   }
   return result
 }
 
-// Period final = weighted average of per-competency grades (bonus already applied to lowest)
+// Period final = weighted average of per-competency grades
 export function computePeriodFinalFromCompetencies(
   studentId: string,
   periodCompetencies: PeriodCompetency[],
@@ -203,30 +247,6 @@ export function computePeriodFinalFromCompetencies(
 
   const weightedSum = withGrades.reduce((s, e) => s + e.grade! * e.weight, 0)
   return Math.round((weightedSum / totalWeight) * 100) / 100
-}
-
-// Returns the competency key that received the bonus (lowest grade), or null if no bonus
-export function getBonusRecipientKey(
-  studentId: string,
-  periodCompetencies: PeriodCompetency[],
-  columns: GradeColumn[],
-  grades: Grade[],
-  criterionGrades: CriterionGrade[],
-  weights: { formativa: number; sumativa: number },
-): string | null {
-  const bonusColumns = columns.filter(c => (c.type === 'bonus' || c.type === 'entrega') && !c.competency_key)
-  if (bonusColumns.length === 0) return null
-  const hasBonus = bonusColumns.some(col => grades.some(g => g.student_id === studentId && g.column_id === col.id))
-  if (!hasBonus) return null
-
-  let lowestKey: string | null = null
-  let lowestGrade = Infinity
-  for (const pc of periodCompetencies) {
-    const pcCols = columns.filter(c => c.competency_key === pc.competency_key)
-    const grade = computeWeightedGrade(studentId, pcCols, grades, criterionGrades, weights, 0)
-    if (grade !== null && grade < lowestGrade) { lowestGrade = grade; lowestKey = pc.competency_key }
-  }
-  return lowestKey
 }
 
 export function getColorForGrade(

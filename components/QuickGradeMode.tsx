@@ -36,6 +36,8 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
   const panelRef = useRef<HTMLDivElement>(null)
   const criterionRefs = useRef<(HTMLDivElement | null)[]>([])
   const scoresRef = useRef<StudentScores>({})
+  const initialScoresRef = useRef<StudentScores>({})
+  const [removingAdjustment, setRemovingAdjustment] = useState(false)
 
   const [activeCriterionIdx, setActiveCriterionIdx] = useState(0)
   const [activeSessionIdx, setActiveSessionIdx] = useState(0)
@@ -73,6 +75,7 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
     }
     setScores(initial)
     scoresRef.current = initial
+    initialScoresRef.current = JSON.parse(JSON.stringify(initial))
   }, [])
 
   useEffect(() => {
@@ -316,10 +319,16 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
           return sum + (isNaN(v) ? 0 : v)
         }, 0)
 
+        // El ajuste con Phidias solo se quita si alguna banda de esta evaluación cambió de verdad
+        const initialScores = initialScoresRef.current[studentId]?.[column.id] ?? {}
+        const rubricChanged = sessionCriteria.some(
+          (c) => (studentScores[c.id] ?? '') !== (initialScores[c.id] ?? '')
+        )
+
         const gradeRes = await fetch('/api/grades', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ student_id: studentId, column_id: column.id, score: Math.max(1, total) }),
+          body: JSON.stringify({ student_id: studentId, column_id: column.id, score: Math.max(1, total), clear_phidias: rubricChanged }),
         })
         if (gradeRes.redirected || gradeRes.url.includes('/login')) {
           alert('Tu sesión expiró. Recarga la página e inicia sesión de nuevo.')
@@ -357,6 +366,9 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
       }
 
       setSaved((prev) => new Set<string>([...Array.from(prev), studentId]))
+      if (scoresRef.current[studentId]) {
+        initialScoresRef.current[studentId] = JSON.parse(JSON.stringify(scoresRef.current[studentId]))
+      }
 
       const fb = composeFeedback(studentId)
       if (fb) setFeedbacks((prev) => ({ ...prev, [studentId]: fb }))
@@ -368,6 +380,23 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
       return false
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function removePhidiasAdjustment(gradeId: string) {
+    setRemovingAdjustment(true)
+    try {
+      const res = await fetch('/api/grades/phidias', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grade_id: gradeId }),
+      })
+      if (!res.ok) { alert('No se pudo quitar el ajuste.'); return }
+      onSave([await res.json()], [])
+    } catch {
+      alert('No se pudo conectar al servidor.')
+    } finally {
+      setRemovingAdjustment(false)
     }
   }
 
@@ -533,6 +562,28 @@ export default function QuickGradeMode({ sessions, students, grades, criterionGr
               </p>
             </div>
             <div className="text-right">
+              {(() => {
+                const g = grades.find((x) => x.student_id === currentStudent?.id && x.column_id === activeSession.column.id)
+                if (g?.phidias_score == null) return null
+                return (
+                  <div className="mb-2 inline-block text-left bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+                    <p className="text-sm font-semibold text-purple-800">
+                      Nota {Number(g.phidias_score).toFixed(1)} por ajuste con Phidias
+                    </p>
+                    <p className="text-xs text-purple-600">
+                      La rúbrica suma {getActiveTotal(currentStudent?.id ?? '').toFixed(1)}; se usa la nota de Phidias.
+                      Si cambias alguna banda, el ajuste se quita.
+                    </p>
+                    <button
+                      onClick={() => removePhidiasAdjustment(g.id)}
+                      disabled={removingAdjustment}
+                      className="mt-1 text-xs text-purple-700 underline hover:text-purple-900 disabled:opacity-50"
+                    >
+                      {removingAdjustment ? 'Quitando…' : 'Quitar ajuste (usar la rúbrica)'}
+                    </button>
+                  </div>
+                )
+              })()}
               <div className="text-3xl font-bold text-blue-700">
                 {getActiveTotal(currentStudent?.id ?? '').toFixed(1)}
               </div>

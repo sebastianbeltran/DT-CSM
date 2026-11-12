@@ -24,7 +24,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const { student_id, column_id, score, group_id, is_manually_adjusted } = await req.json()
+  const { student_id, column_id, score, group_id, is_manually_adjusted, clear_phidias } = await req.json()
 
   const { data, error } = await supabase
     .from('grades')
@@ -36,6 +36,8 @@ export async function POST(req: Request) {
         group_id,
         is_manually_adjusted: is_manually_adjusted ?? false,
         updated_at: new Date().toISOString(),
+        // Solo se quita el ajuste con Phidias cuando la rúbrica realmente cambió
+        ...(clear_phidias ? { phidias_score: null, phidias_adjusted_at: null } : {}),
       },
       { onConflict: 'student_id,column_id' }
     )

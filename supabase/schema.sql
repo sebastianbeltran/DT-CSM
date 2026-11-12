@@ -101,10 +101,16 @@ CREATE TABLE IF NOT EXISTS grades (
   score NUMERIC(5,2),
   is_manually_adjusted BOOLEAN NOT NULL DEFAULT FALSE,
   group_id UUID,
+  phidias_score NUMERIC(5,2),          -- nota final elegida al comparar con Phidias (reemplaza la rúbrica)
+  phidias_adjusted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(student_id, column_id)
 );
+
+-- Migración para bases existentes (ajuste con Phidias)
+ALTER TABLE grades ADD COLUMN IF NOT EXISTS phidias_score NUMERIC(5,2);
+ALTER TABLE grades ADD COLUMN IF NOT EXISTS phidias_adjusted_at TIMESTAMPTZ;
 
 -- Criterion grades (puntajes por criterio en sumativas)
 CREATE TABLE IF NOT EXISTS criterion_grades (

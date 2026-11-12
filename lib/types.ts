@@ -94,6 +94,9 @@ export interface Grade {
   score?: number
   is_manually_adjusted: boolean
   group_id?: string
+  /** Nota final elegida al comparar con Phidias. Si existe, reemplaza la suma de la rúbrica. */
+  phidias_score?: number | null
+  phidias_adjusted_at?: string | null
   created_at: string
   updated_at: string
 }
