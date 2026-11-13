@@ -21,7 +21,6 @@ NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ADMIN_PASSWORD=pon_aqui_tu_contrasena_de_acceso
 SESSION_SECRET=cadena_aleatoria_larga_minimo_32_caracteres
-ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
 2. Prueba en local:
@@ -58,7 +57,6 @@ En el dashboard de Vercel → tu proyecto → **Settings → Environment Variabl
 - `SUPABASE_SERVICE_ROLE_KEY` = tu service role key
 - `ADMIN_PASSWORD` = tu contraseña de acceso a la app
 - `SESSION_SECRET` = cadena aleatoria larga (puedes generar con: `openssl rand -base64 32`)
-- `ANTHROPIC_API_KEY` = tu API key de Anthropic
 
 Luego redespliega: **Deployments → Redeploy**
 
@@ -74,7 +72,7 @@ Luego redespliega: **Deployments → Redeploy**
 6. **Calificar**: 
    - **Formativas/Bonus**: clic directo en la celda, escribe la nota (0-10)
    - **Sumativas**: clic en el encabezado de la columna → Modo de calificación rápida
-7. **Informes IA**: botón "Informe" al final de cada fila de estudiante
+7. **Informes**: botón "Informe" al final de cada fila de estudiante
 
 ## Notas importantes
 

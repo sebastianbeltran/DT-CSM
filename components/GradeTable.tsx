@@ -24,6 +24,8 @@ import GroupsPanel from './GroupsPanel'
 import GroupGradeModal from './GroupGradeModal'
 import MoveStudentModal from './MoveStudentModal'
 
+const VIEW_PREFS_KEY = 'dtcsm:grade-table-view'
+
 interface Group {
   id: string
   name: string
@@ -64,11 +66,13 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const headerRow1Ref = useRef<HTMLTableRowElement>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortByGrade, setSortByGrade] = useState<'asc' | 'desc' | null>(null)
-  const [copiedClaude, setCopiedClaude] = useState(false)
-  const [claudeThreshold, setClaudeThreshold] = useState(6.5)
-  const [claudeScope, setClaudeScope] = useState<'global' | string>('global')
   const [showArchived, setShowArchived] = useState(false)
   const [phidiasToast, setPhidiasToast] = useState<string | null>(null)
+  // Preferencias de vista (se guardan en este navegador, no en la base de datos)
+  const [semaforoOn, setSemaforoOn] = useState(false)
+  const [alertsOn, setAlertsOn] = useState(true)
+  const [alertThreshold, setAlertThreshold] = useState(6.5)
+  const [prefsLoaded, setPrefsLoaded] = useState(false)
   const [phidiasFallback, setPhidiasFallback] = useState<{ title: string; text: string; note: string } | null>(null)
 
   const [weights, setWeights] = useState(period.grade_weights ?? course.grade_weights ?? { formativa: 40, sumativa: 60 })
@@ -154,6 +158,26 @@ export default function GradeTable({ course, period, students, initialGroups, on
   }
 
   useEffect(() => { loadData() }, [period.id, course.id])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(VIEW_PREFS_KEY)
+      if (raw) {
+        const p = JSON.parse(raw)
+        if (typeof p.semaforoOn === 'boolean') setSemaforoOn(p.semaforoOn)
+        if (typeof p.alertsOn === 'boolean') setAlertsOn(p.alertsOn)
+        if (typeof p.alertThreshold === 'number' && Number.isFinite(p.alertThreshold)) setAlertThreshold(p.alertThreshold)
+      }
+    } catch {}
+    setPrefsLoaded(true)
+  }, [])
+
+  useEffect(() => {
+    if (!prefsLoaded) return
+    try {
+      localStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ semaforoOn, alertsOn, alertThreshold }))
+    } catch {}
+  }, [semaforoOn, alertsOn, alertThreshold, prefsLoaded])
 
   async function loadData() {
     setLoading(true)
@@ -257,11 +281,11 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
   function openQuickGrade(col: GradeColumn, studentId?: string) {
     const colCriteria = criteria.filter((c) => c.column_id === col.id)
-    if (!(col.type === 'sumativa' || (col.type === 'formativa' && colCriteria.length > 0))) return
-    const eligible = columns.filter((c) => {
-      const cc = criteria.filter((cr) => cr.column_id === c.id)
-      return c.type === 'sumativa' || (c.type === 'formativa' && cc.length > 0)
-    })
+    // Rúbrica: sumativas siempre; formativas y bonus (ej. Diagnostic Test) cuando tienen criterios
+    const usesRubric = (c: GradeColumn, cc: Criterion[]) =>
+      c.type === 'sumativa' || ((c.type === 'formativa' || c.type === 'bonus') && cc.length > 0)
+    if (!usesRubric(col, colCriteria)) return
+    const eligible = columns.filter((c) => usesRubric(c, criteria.filter((cr) => cr.column_id === c.id)))
     if (eligible.length <= 1) {
       setQuickGradeSessions([{ column: col, criteria: colCriteria }])
       setQuickGradeInitialStudentId(studentId ?? null)
@@ -316,109 +340,29 @@ export default function GradeTable({ course, period, students, initialGroups, on
       })
     : studentsWithGrades
 
-  const atRisk = sortedStudents.filter((s) => s.finalGrade !== null && s.finalGrade < 6.5)
-
-  function copyForClaude() {
-    const date = new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })
-    const lines: string[] = []
-    lines.push('REPORTE DE ESTUDIANTES CON BAJO RENDIMIENTO')
-    lines.push(`Curso: ${course.name} | Período: ${period.name}`)
-    lines.push(`Fecha: ${date}`)
-    lines.push('')
-
-    if (claudeScope === 'global') {
-      const below = studentsWithGrades.filter((s) => s.finalGrade !== null && s.finalGrade < claudeThreshold)
-      const noGrade = studentsWithGrades.filter((s) => s.finalGrade === null)
-      if (below.length === 0 && noGrade.length === 0) {
-        alert(`No hay estudiantes sin nota ni con nota final menor a ${claudeThreshold}.`); return
-      }
-      if (below.length > 0) {
-        lines.push(`Estudiantes con nota final del trimestre menor a ${claudeThreshold} (escala 1–10):`)
-        lines.push('')
-        below.forEach((s, i) => {
-          lines.push(`${i + 1}. ${s.name} — Nota final: ${s.finalGrade!.toFixed(1)}`)
-          for (const pc of periodCompetencies) {
-            const g = s.competencyGrades[pc.competency_key]
-            const label = COMPETENCIES[pc.competency_key as CompetencyKey]?.short ?? pc.competency_key
-            lines.push(`   • ${label}: ${g !== null && g !== undefined ? g.toFixed(1) : 'Sin nota'}`)
-          }
-          lines.push('')
-        })
-      }
-      if (noGrade.length > 0) {
-        lines.push('Sin nota registrada (sin portafolio u otras causas):')
-        lines.push('')
-        noGrade.forEach((s, i) => lines.push(`${i + 1}. ${s.name}`))
-        lines.push('')
-      }
-      lines.push(`Total alertas: ${below.length + noGrade.length} de ${localStudents.length} estudiantes.`)
-
-    } else if (periodCompetencies.some((pc) => pc.competency_key === claudeScope)) {
-      const pc = periodCompetencies.find((p) => p.competency_key === claudeScope)!
-      const label = COMPETENCIES[pc.competency_key as CompetencyKey]?.short ?? pc.competency_key
-      const below = studentsWithGrades.filter((s) => {
-        const g = s.competencyGrades[pc.competency_key]
-        return g !== null && g !== undefined && g < claudeThreshold
+  // Actividades que "debe" un estudiante: evaluaciones de competencia (o entregas) sin nota,
+  // pero solo si al menos otro estudiante ya tiene nota ahí (la actividad ya se calificó).
+  // En entregas, "No" también cuenta como pendiente.
+  const gradedColumnIds = new Set(
+    grades
+      .filter((g) => localStudents.some((s) => s.id === g.student_id))
+      .filter((g) => {
+        const col = columns.find((c) => c.id === g.column_id)
+        return col ? getStudentScore(g.student_id, col, grades, criterionGrades) !== null : false
       })
-      const noGrade = studentsWithGrades.filter((s) => {
-        const g = s.competencyGrades[pc.competency_key]
-        return g === null || g === undefined
-      })
-      if (below.length === 0 && noGrade.length === 0) {
-        alert(`No hay estudiantes sin nota ni con nota en ${label} menor a ${claudeThreshold}.`); return
-      }
-      lines.push(`Filtro: competencia ${label}`)
-      lines.push('')
-      if (below.length > 0) {
-        lines.push(`Estudiantes con nota en ${label} menor a ${claudeThreshold}:`)
-        lines.push('')
-        below.forEach((s, i) => {
-          const g = s.competencyGrades[pc.competency_key]!
-          lines.push(`${i + 1}. ${s.name} — ${label}: ${g.toFixed(1)} | Nota final: ${s.finalGrade !== null ? s.finalGrade.toFixed(1) : 'Sin nota'}`)
-        })
-        lines.push('')
-      }
-      if (noGrade.length > 0) {
-        lines.push(`Sin nota en ${label}:`)
-        noGrade.forEach((s, i) => lines.push(`${i + 1}. ${s.name}`))
-        lines.push('')
-      }
-      lines.push(`Total alertas: ${below.length + noGrade.length} de ${localStudents.length} estudiantes.`)
-
-    } else {
-      const col = columns.find((c) => c.id === claudeScope)
-      if (!col) { alert('Selecciona una evaluación válida.'); return }
-      const below = studentsWithGrades.filter((s) => {
-        const score = getStudentScore(s.id, col, grades, criterionGrades)
-        return score !== null && score < claudeThreshold
-      })
-      const noGrade = studentsWithGrades.filter((s) => getStudentScore(s.id, col, grades, criterionGrades) === null)
-      if (below.length === 0 && noGrade.length === 0) {
-        alert(`No hay estudiantes sin nota ni con nota en "${col.name}" menor a ${claudeThreshold}.`); return
-      }
-      lines.push(`Filtro: evaluación "${col.name}"`)
-      lines.push('')
-      if (below.length > 0) {
-        lines.push(`Estudiantes con nota en "${col.name}" menor a ${claudeThreshold}:`)
-        lines.push('')
-        below.forEach((s, i) => {
-          const score = getStudentScore(s.id, col, grades, criterionGrades)!
-          lines.push(`${i + 1}. ${s.name} — ${col.name}: ${score.toFixed(1)} | Nota final: ${s.finalGrade !== null ? s.finalGrade.toFixed(1) : 'Sin nota'}`)
-        })
-        lines.push('')
-      }
-      if (noGrade.length > 0) {
-        lines.push(`Sin nota en "${col.name}" (no entregaron o sin acceso):`)
-        noGrade.forEach((s, i) => lines.push(`${i + 1}. ${s.name}`))
-        lines.push('')
-      }
-      lines.push(`Total alertas: ${below.length + noGrade.length} de ${localStudents.length} estudiantes.`)
-    }
-
-    navigator.clipboard.writeText(lines.join('\n'))
-      .then(() => { setCopiedClaude(true); setTimeout(() => setCopiedClaude(false), 2500) })
-      .catch(() => alert('No se pudo copiar al portapapeles. Inténtalo de nuevo.'))
+      .map((g) => g.column_id)
+  )
+  const trackedColumns = columns.filter((c) => (c.competency_key && c.type !== 'bonus') || c.type === 'entrega')
+  function owedActivities(studentId: string): GradeColumn[] {
+    return trackedColumns.filter((c) => {
+      const score = getStudentScore(studentId, c, grades, criterionGrades)
+      if (c.type === 'entrega' && score === 0) return true
+      return score === null && gradedColumnIds.has(c.id)
+    })
   }
+
+  const atRisk = sortedStudents.filter((s) => s.finalGrade !== null && s.finalGrade < alertThreshold)
+  const owingCount = sortedStudents.filter((s) => owedActivities(s.id).length > 0).length
 
   // Copia las notas de UNA actividad para pegarlas en la extensión de Phidias:
   // "Nombre\tNota" por línea, sin encabezado; se omiten los estudiantes sin nota.
@@ -537,12 +481,41 @@ export default function GradeTable({ course, period, students, initialGroups, on
           {sortByGrade === 'asc' ? '↑ Nota' : sortByGrade === 'desc' ? '↓ Nota' : 'Ord. por nota'}
         </button>
 
-        <button
-          onClick={() => setShowColorConfig(true)}
-          className="text-sm px-3 py-1.5 border border-gray-300 bg-white rounded-lg hover:bg-gray-50"
-        >
-          Semáforo
-        </button>
+        <div className="flex items-center border border-gray-300 bg-white rounded-lg overflow-hidden text-sm">
+          <label className="flex items-center gap-1.5 px-3 py-1.5 cursor-pointer select-none">
+            <input type="checkbox" checked={semaforoOn} onChange={(e) => setSemaforoOn(e.target.checked)} />
+            Semáforo
+          </label>
+          <button
+            onClick={() => setShowColorConfig(true)}
+            className="px-2 py-1.5 border-l border-gray-300 text-gray-500 hover:bg-gray-50"
+            title="Configurar colores del semáforo"
+          >
+            ⚙
+          </button>
+        </div>
+
+        <div className="flex items-center border border-gray-300 bg-white rounded-lg overflow-hidden text-sm">
+          <label className="flex items-center gap-1.5 px-3 py-1.5 cursor-pointer select-none" title="Resalta el nombre de quien debe actividades o tiene nota final por debajo del límite">
+            <input type="checkbox" checked={alertsOn} onChange={(e) => setAlertsOn(e.target.checked)} />
+            Alertas
+          </label>
+          <span className="text-xs text-gray-400 pl-1 border-l border-gray-300 py-1.5">&lt;</span>
+          <input
+            type="number"
+            min={1}
+            max={10}
+            step={0.1}
+            value={alertThreshold}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              if (Number.isFinite(v)) setAlertThreshold(v)
+            }}
+            disabled={!alertsOn}
+            className="w-12 text-center py-1.5 focus:outline-none disabled:text-gray-300"
+            title="Nota final por debajo de la cual se marca al estudiante"
+          />
+        </div>
 
         <button
           onClick={() => setShowGroupsPanel(true)}
@@ -558,57 +531,16 @@ export default function GradeTable({ course, period, students, initialGroups, on
           📝 Informes
         </button>
 
-        {atRisk.length > 0 && (
+        {alertsOn && atRisk.length > 0 && (
           <span className="text-sm px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-red-700">
-            {atRisk.length} en riesgo
+            {atRisk.length} bajo {alertThreshold}
           </span>
         )}
-
-        <div className="flex items-center border border-gray-300 bg-white rounded-lg overflow-hidden text-sm">
-          <select
-            value={claudeScope}
-            onChange={(e) => setClaudeScope(e.target.value)}
-            className="py-1.5 pl-2 pr-1 focus:outline-none bg-transparent text-gray-700 max-w-[140px]"
-          >
-            <option value="global">Nota global</option>
-            {periodCompetencies.length > 0 && (
-              <optgroup label="Competencia">
-                {periodCompetencies.map((pc) => (
-                  <option key={pc.competency_key} value={pc.competency_key}>
-                    {COMPETENCIES[pc.competency_key as CompetencyKey]?.short ?? pc.competency_key}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {columns.filter((c) => c.type !== 'entrega').length > 0 && (
-              <optgroup label="Evaluación">
-                {columns.filter((c) => c.type !== 'entrega').map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-          <span className="text-xs text-gray-400 px-1">&lt;</span>
-          <input
-            type="number"
-            min={1}
-            max={10}
-            step={0.5}
-            value={claudeThreshold}
-            onChange={(e) => setClaudeThreshold(Number(e.target.value))}
-            className="w-10 text-center py-1.5 focus:outline-none"
-          />
-          <button
-            onClick={copyForClaude}
-            className={`px-3 py-1.5 border-l transition-colors flex items-center gap-1.5 ${
-              copiedClaude
-                ? 'bg-green-50 border-green-300 text-green-700'
-                : 'border-gray-300 hover:bg-gray-50'
-            }`}
-          >
-            {copiedClaude ? '✓ ¡Copiado!' : '✦ Copiar para Claude'}
-          </button>
-        </div>
+        {alertsOn && owingCount > 0 && (
+          <span className="text-sm px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            {owingCount} deben actividades
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           <WeightsEditor
@@ -807,17 +739,33 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
           <tbody>
             {sortedStudents.map((student, studentIdx) => {
-              const bg = getColorForGrade(student.finalGrade, colorRanges)
-              const isRisk = student.finalGrade !== null && student.finalGrade < 6.5
+              const bg = semaforoOn ? getColorForGrade(student.finalGrade, colorRanges) : 'transparent'
+              const isRisk = student.finalGrade !== null && student.finalGrade < alertThreshold
+              const owed = alertsOn ? owedActivities(student.id) : []
+              const owedIds = new Set(owed.map((c) => c.id))
+              const isLow = alertsOn && isRisk
+              const nameCellClass = isLow || owed.length > 0 ? 'bg-red-300 text-red-950' : 'bg-white'
+              const alertTitle = [
+                isLow ? `Nota final ${student.finalGrade!.toFixed(1)} (menor a ${alertThreshold})` : '',
+                owed.length > 0 ? `Debe ${owed.length} actividad${owed.length === 1 ? '' : 'es'}: ${owed.map((c) => c.name).join(', ')}` : '',
+              ].filter(Boolean).join('\n')
               return (
                 <tr
                   key={student.id}
                   style={{ backgroundColor: bg !== 'transparent' ? bg + '55' : undefined }}
                   className="hover:brightness-95 transition-all"
                 >
-                  <td className="col-sticky px-3 py-1 border-r-2 border-gray-200 bg-white font-medium text-sm whitespace-nowrap">
+                  <td
+                    className={`col-sticky px-3 py-1 border-r-2 border-gray-200 font-medium text-sm whitespace-nowrap ${nameCellClass}`}
+                    title={alertTitle || undefined}
+                  >
                     <div className="flex items-center gap-1 group">
                       <span className="flex-1">{student.name}</span>
+                      {owed.length > 0 && (
+                        <span className="text-[10px] font-semibold px-1.5 rounded-full bg-red-600 text-white">
+                          debe {owed.length}
+                        </span>
+                      )}
                       <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
                         <button
                           onClick={() => setMoveStudent(student)}
@@ -859,6 +807,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                                 criterionGrades={criterionGrades}
                                 criteria={colCriteria}
                                 bonus={student.bonusPlacement?.columnId === col.id ? student.bonusPlacement : null}
+                                owed={owedIds.has(col.id)}
                                 onSave={saveGrade}
                                 onOpenQuickGrade={() => openQuickGrade(col, student.id)}
                               />
@@ -901,6 +850,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                       student={student}
                       grades={grades}
                       onSave={saveGrade}
+                      owed={owedIds.has(col.id)}
                     />
                   ))}
 
@@ -1299,7 +1249,7 @@ function ColumnHeader({
   }
 
   return (
-    <th className={`relative px-1 py-1.5 text-center border-r border-gray-200 group ${typeColor}`}>
+    <th className={`px-1 py-1.5 text-center border-r border-gray-200 group ${typeColor}`}>
       <div className="flex flex-col items-center gap-0.5">
         {(col.type === 'sumativa' || criteria.length > 0) ? (
           <button
@@ -1323,8 +1273,7 @@ function ColumnHeader({
               : `Sum. (${criteria.length}crit.)`}
           </span>
         )}
-      </div>
-      <div className="absolute top-1 right-0.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {hasGroups && (
           <button onClick={onGroupGrade} className="text-gray-400 hover:text-blue-600 text-xs" title="Calificar por grupo">👥</button>
         )}
@@ -1343,6 +1292,7 @@ function ColumnHeader({
         <button onClick={onExport} className="text-gray-400 hover:text-green-600 text-xs" title="Exportar notas a Excel">↓</button>
         <button onClick={onEdit} className="text-gray-400 hover:text-blue-600 text-xs" title="Editar">✎</button>
         <button onClick={onDelete} className="text-gray-400 hover:text-red-500 text-xs" title="Eliminar">✕</button>
+        </div>
       </div>
     </th>
   )
@@ -1358,6 +1308,7 @@ function GradeCell({
   criterionGrades,
   criteria,
   bonus = null,
+  owed = false,
   onSave,
   onOpenQuickGrade,
 }: {
@@ -1368,6 +1319,7 @@ function GradeCell({
   criterionGrades: CriterionGrade[]
   criteria: Criterion[]
   bonus?: BonusPlacement | null
+  owed?: boolean
   onSave: (studentId: string, columnId: string, score: number | null) => Promise<void>
   onOpenQuickGrade: () => void
 }) {
@@ -1389,7 +1341,7 @@ function GradeCell({
   if (col.type === 'sumativa' || hasCriteria) {
     return (
       <td
-        className={`px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50 ${isZero ? 'bg-red-50' : ''}`}
+        className={`px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50 ${isZero ? 'bg-red-50' : owed ? 'bg-red-300' : ''}`}
         onClick={onOpenQuickGrade}
         title={hasCriteria ? 'Click para calificar por rúbrica' : 'Definir criterios primero'}
       >
@@ -1453,7 +1405,7 @@ function GradeCell({
   }
 
   return (
-    <td className={`px-1 py-0.5 text-center border-r border-gray-200 ${saving ? 'bg-blue-50' : isZero ? 'bg-red-50' : ''}`}>
+    <td className={`px-1 py-0.5 text-center border-r border-gray-200 ${saving ? 'bg-blue-50' : isZero ? 'bg-red-50' : owed ? 'bg-red-300' : ''}`}>
       {disabled ? (
         <span className="text-gray-300 text-xs" title="Escribe la descripción de la columna primero">—</span>
       ) : (
@@ -1495,11 +1447,13 @@ function EntregaCell({
   col,
   student,
   grades,
+  owed = false,
   onSave,
 }: {
   col: GradeColumn
   student: Student
   grades: Grade[]
+  owed?: boolean
   onSave: (studentId: string, columnId: string, score: number | null) => Promise<void>
 }) {
   const grade = grades.find((g) => g.student_id === student.id && g.column_id === col.id)
@@ -1515,7 +1469,7 @@ function EntregaCell({
   }
 
   return (
-    <td className="px-1 py-0.5 text-center border-r border-teal-100 bg-teal-50/30">
+    <td className={`px-1 py-0.5 text-center border-r border-teal-100 ${owed ? 'bg-red-300' : 'bg-teal-50/30'}`}>
       <button
         onClick={toggle}
         disabled={saving}

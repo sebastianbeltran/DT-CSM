@@ -32,9 +32,6 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
   const [description, setDescription] = useState(column?.description ?? '')
   const [criteria, setCriteria] = useState<CriterionDraft[]>([])
   const [loadingCriteria, setLoadingCriteria] = useState(false)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiDescLoading, setAiDescLoading] = useState(false)
-  const [aiHint, setAiHint] = useState('')
   const [saving, setSaving] = useState(false)
   const [bonusWithCriteria, setBonusWithCriteria] = useState(false)
   const [formativaWithCriteria, setFormativaWithCriteria] = useState(false)
@@ -59,53 +56,6 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
         })
     }
   })
-
-  async function generateDescription() {
-    if (!name.trim()) { alert('Escribe primero el nombre de la columna'); return }
-    setAiDescLoading(true)
-    try {
-      const res = await fetch('/api/ai/description', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          activity: name,
-          phase: competency?.name ?? '',
-          course: course.name,
-          type,
-          notes: aiHint,
-        }),
-      })
-      const data = await res.json()
-      if (data.description) setDescription(data.description)
-      else if (data.error) alert('Error IA: ' + data.error)
-    } catch {
-      alert('No se pudo conectar con la IA. Verifica que ANTHROPIC_API_KEY esté configurada.')
-    }
-    setAiDescLoading(false)
-  }
-
-  async function generateCriteria() {
-    if (!description.trim()) { alert('Escribe primero la descripción de la actividad'); return }
-    setAiLoading(true)
-    try {
-      const res = await fetch('/api/ai/criteria', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description,
-          activity: name,
-          phase: competency?.name ?? '',
-          course: course.name,
-        }),
-      })
-      const data = await res.json()
-      if (data.criteria) setCriteria(data.criteria)
-      else if (data.error) alert('Error IA: ' + data.error)
-    } catch {
-      alert('No se pudo conectar con la IA. Verifica que ANTHROPIC_API_KEY esté configurada.')
-    }
-    setAiLoading(false)
-  }
 
   function importFromJson() {
     setJsonError('')
@@ -278,19 +228,6 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
             />
           </div>
 
-          {/* AI hint */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Indicaciones para IA (opcional)
-            </label>
-            <input
-              value={aiHint}
-              onChange={(e) => setAiHint(e.target.value)}
-              placeholder="Ej: usa herramienta pluma, capas, cuentagotas..."
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
           {/* Description */}
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -298,13 +235,6 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
                 Descripción de la actividad *
                 <span className="ml-1 text-xs text-gray-400">(obligatoria para calificar)</span>
               </label>
-              <button
-                onClick={generateDescription}
-                disabled={aiDescLoading}
-                className="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50 flex items-center gap-1"
-              >
-                {aiDescLoading ? 'Generando...' : '✨ Ayúdame a redactar'}
-              </button>
             </div>
             <textarea
               value={description}
@@ -385,13 +315,6 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
                     className="text-xs text-blue-600 hover:text-blue-700"
                   >
                     + Agregar
-                  </button>
-                  <button
-                    onClick={generateCriteria}
-                    disabled={aiLoading}
-                    className="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
-                  >
-                    {aiLoading ? 'Generando...' : '✨ Sugerir criterios'}
                   </button>
                 </div>
               </div>
