@@ -34,6 +34,7 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
   const [loadingCriteria, setLoadingCriteria] = useState(false)
   const [saving, setSaving] = useState(false)
   const [bonusWithCriteria, setBonusWithCriteria] = useState(false)
+  const [hadCriteria, setHadCriteria] = useState(false)
   const [formativaWithCriteria, setFormativaWithCriteria] = useState(false)
   const [showJsonImport, setShowJsonImport] = useState(false)
   const [jsonInput, setJsonInput] = useState('')
@@ -50,6 +51,7 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
         .then((r) => r.json())
         .then((data) => {
           setCriteria(data.map((c: Criterion) => ({ id: c.id, name: c.name, max_score: c.max_score, levels: c.levels })))
+          setHadCriteria(data.length > 0)
           if (column.type === 'bonus' && data.length > 0) setBonusWithCriteria(true)
           if (column.type === 'formativa' && data.length > 0) setFormativaWithCriteria(true)
           setLoadingCriteria(false)
@@ -112,6 +114,11 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
     if (type === 'bonus' && bonusWithCriteria && criteria.length === 0 && !isEdit) {
       if (!confirm('¿Guardar sin criterios? Podrás agregarlos después editando la columna.')) return
     }
+    const turningOffCriteria = isEdit && hadCriteria && !isEntrega &&
+      ((type === 'bonus' && !bonusWithCriteria) || (type === 'formativa' && !formativaWithCriteria))
+    if (turningOffCriteria) {
+      if (!confirm('Se quitarán los criterios de esta evaluación y pasará a nota directa. Las notas actuales se conservan, pero se pierde el desglose por criterio. ¿Continuar?')) return
+    }
 
     setSaving(true)
 
@@ -160,7 +167,18 @@ export default function ColumnModal({ competencyKey, column, defaultType, period
       }
 
       let savedCriteria: Criterion[] | undefined
-      if ((type === 'sumativa' || (type === 'bonus' && bonusWithCriteria) || (type === 'formativa' && formativaWithCriteria)) && criteria.length > 0) {
+      const wantsCriteria = !isEntrega && (type === 'sumativa' || (type === 'bonus' && bonusWithCriteria) || (type === 'formativa' && formativaWithCriteria))
+      if (isEdit && hadCriteria && !wantsCriteria) {
+        // Se desactivaron los criterios: quitarlos para que la columna vuelva a ser de nota directa.
+        // Las notas (grades.score) se conservan; solo se pierde el desglose por criterio.
+        const res = await fetch('/api/criteria', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ column_id: savedColumn.id, criteria: [] }),
+        })
+        if (res.ok) savedCriteria = []
+        else alert('La columna se guardó, pero no se pudieron quitar los criterios.')
+      } else if ((type === 'sumativa' || (type === 'bonus' && bonusWithCriteria) || (type === 'formativa' && formativaWithCriteria)) && criteria.length > 0) {
         const res = await fetch('/api/criteria', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

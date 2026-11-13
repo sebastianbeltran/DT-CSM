@@ -53,6 +53,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [quickGradeSessions, setQuickGradeSessions] = useState<ColumnSession[] | null>(null)
   const [quickGradeInitialStudentId, setQuickGradeInitialStudentId] = useState<string | null>(null)
   const [colPickerFor, setColPickerFor] = useState<{ col: GradeColumn; studentId?: string } | null>(null)
+  const [removingCompetency, setRemovingCompetency] = useState<PeriodCompetency | null>(null)
   const [columnModal, setColumnModal] = useState<{ competencyKey?: CompetencyKey; column?: GradeColumn; type?: string } | null>(null)
   const [reportStudent, setReportStudent] = useState<Student | null>(null)
   const [showColorConfig, setShowColorConfig] = useState(false)
@@ -247,6 +248,20 @@ export default function GradeTable({ course, period, students, initialGroups, on
       setColumns((prev) => prev.filter((c) => c.id !== col.id))
     } catch {
       alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+    }
+  }
+
+  async function removeCompetency(pc: PeriodCompetency, mergeIntoId: string | null) {
+    try {
+      const qs = mergeIntoId ? `?mergeInto=${mergeIntoId}` : ''
+      const res = await fetch(`/api/period-competencies/${pc.id}${qs}`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { alert(data.error ?? 'Error al eliminar la competencia.'); return false }
+      await loadData()
+      return true
+    } catch {
+      alert('No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.')
+      return false
     }
   }
 
@@ -589,7 +604,23 @@ export default function GradeTable({ course, period, students, initialGroups, on
                     className={`px-2 py-2 text-xs font-semibold text-center border-r-2 ${meta.bgColor} ${meta.textColor} ${meta.borderColor}`}
                   >
                     <div className="flex items-center justify-center gap-2 flex-wrap">
-                      <span>{meta.short} — {meta.name}</span>
+                      {pc.merged_from && pc.merged_from.length > 0 ? (
+                        <span className="inline-flex items-center gap-1 flex-wrap justify-center" title="Competencias fusionadas">
+                          {[{ competency_key: pc.competency_key }, ...pc.merged_from].map((m, i) => {
+                            const mm = COMPETENCIES[m.competency_key as CompetencyKey]
+                            return (
+                              <Fragment key={m.competency_key + i}>
+                                {i > 0 && <span className="opacity-60">+</span>}
+                                <span className={`px-1.5 py-0.5 rounded-md border ${mm.bgColor} ${mm.textColor} ${mm.borderColor}`}>
+                                  {mm.short} — {mm.name}
+                                </span>
+                              </Fragment>
+                            )
+                          })}
+                        </span>
+                      ) : (
+                        <span>{meta.short} — {meta.name}</span>
+                      )}
                       <button
                         onClick={() => setColumnModal({ competencyKey: pc.competency_key as CompetencyKey, type: 'formativa' })}
                         className="opacity-70 hover:opacity-100 text-xs ml-1"
@@ -608,12 +639,34 @@ export default function GradeTable({ course, period, students, initialGroups, on
                         weightPct={weightPct}
                         onSave={(w) => updateCompetencyWeight(pc, w)}
                       />
+                      {periodCompetencies.length > 1 && (
+                        <button
+                          onClick={() => setRemovingCompetency(pc)}
+                          className="opacity-50 hover:opacity-100 text-xs px-1"
+                          title="Eliminar o fusionar esta competencia"
+                        >
+                          🗑
+                        </button>
+                      )}
                     </div>
                     {pc.learning_objective && (
-                      <p className="text-xs font-normal opacity-60 mt-0.5 max-w-xs mx-auto">
+                      <p
+                        className="text-[11px] leading-snug font-normal opacity-60 mt-0.5 text-left line-clamp-2"
+                        title={pc.learning_objective}
+                      >
+                        {pc.merged_from && pc.merged_from.length > 0 && <span className="font-semibold">{meta.short}: </span>}
                         {pc.learning_objective}
                       </p>
                     )}
+                    {(pc.merged_from ?? []).filter((m) => m.learning_objective).map((m, i) => (
+                      <p
+                        key={m.competency_key + i}
+                        className={`text-[11px] leading-snug font-normal mt-0.5 text-left line-clamp-2 opacity-80 ${COMPETENCIES[m.competency_key as CompetencyKey].textColor}`}
+                        title={m.learning_objective ?? ''}
+                      >
+                        <span className="font-semibold">{m.competency_key}: </span>{m.learning_objective}
+                      </p>
+                    ))}
                   </th>
                 )
               })}
@@ -961,6 +1014,17 @@ export default function GradeTable({ course, period, students, initialGroups, on
         />
       )}
 
+      {removingCompetency && (
+        <RemoveCompetencyModal
+          pc={removingCompetency}
+          others={periodCompetencies.filter((p) => p.id !== removingCompetency.id)}
+          columns={columns}
+          grades={grades}
+          onClose={() => setRemovingCompetency(null)}
+          onConfirm={(mergeIntoId) => removeCompetency(removingCompetency, mergeIntoId)}
+        />
+      )}
+
       {columnModal !== null && (
         <ColumnModal
           competencyKey={columnModal.competencyKey ?? (columnModal.column?.competency_key as CompetencyKey | undefined)}
@@ -1049,6 +1113,108 @@ export default function GradeTable({ course, period, students, initialGroups, on
         />
       )}
     </div>
+  )
+}
+
+// ─── Remove / Merge Competency Modal ──────────────────────────────────────────
+
+function RemoveCompetencyModal({
+  pc,
+  others,
+  columns,
+  grades,
+  onClose,
+  onConfirm,
+}: {
+  pc: PeriodCompetency
+  others: PeriodCompetency[]
+  columns: GradeColumn[]
+  grades: Grade[]
+  onClose: () => void
+  onConfirm: (mergeIntoId: string | null) => Promise<boolean>
+}) {
+  const [mode, setMode] = useState<'merge' | 'delete'>('merge')
+  const [targetId, setTargetId] = useState(others[0]?.id ?? '')
+  const [working, setWorking] = useState(false)
+  const meta = COMPETENCIES[pc.competency_key as CompetencyKey]
+  const pcCols = columns.filter((c) => c.competency_key === pc.competency_key)
+  const colIds = new Set(pcCols.map((c) => c.id))
+  const gradedCols = pcCols.filter((c) => grades.some((g) => g.column_id === c.id)).length
+  const target = others.find((o) => o.id === targetId)
+
+  async function submit() {
+    if (mode === 'delete' && gradedCols > 0) {
+      const ok = confirm(`Se eliminarán ${pcCols.length} evaluaciones y TODAS sus notas (${grades.filter((g) => colIds.has(g.column_id)).length} notas). Esta acción no se puede deshacer. ¿Continuar?`)
+      if (!ok) return
+    }
+    setWorking(true)
+    const ok = await onConfirm(mode === 'merge' ? targetId : null)
+    setWorking(false)
+    if (ok) onClose()
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-base font-bold mb-1">Quitar competencia {meta.short}</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          {meta.name} — tiene {pcCols.length} evaluación{pcCols.length === 1 ? '' : 'es'}
+          {gradedCols > 0 ? ` (${gradedCols} con notas)` : ''}.
+        </p>
+
+        <label className={`block rounded-xl border p-3 mb-2 cursor-pointer ${mode === 'merge' ? 'border-blue-400 bg-blue-50' : 'border-gray-200'}`}>
+          <div className="flex items-center gap-2">
+            <input type="radio" checked={mode === 'merge'} onChange={() => setMode('merge')} />
+            <span className="text-sm font-medium">Fusionar con otra competencia</span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1 ml-5">Las evaluaciones y sus notas se mueven a la competencia elegida.</p>
+          {mode === 'merge' && (
+            <select
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
+              className="mt-2 ml-5 text-sm border rounded-lg px-2 py-1"
+            >
+              {others.map((o) => {
+                const m = COMPETENCIES[o.competency_key as CompetencyKey]
+                return <option key={o.id} value={o.id}>{m.short} — {m.name}</option>
+              })}
+            </select>
+          )}
+        </label>
+
+        <label className={`block rounded-xl border p-3 cursor-pointer ${mode === 'delete' ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+          <div className="flex items-center gap-2">
+            <input type="radio" checked={mode === 'delete'} onChange={() => setMode('delete')} />
+            <span className="text-sm font-medium">Eliminar con sus evaluaciones</span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1 ml-5">
+            {pcCols.length > 0
+              ? `Se borran ${pcCols.length} evaluación${pcCols.length === 1 ? '' : 'es'}${gradedCols > 0 ? ' y sus notas' : ''}.`
+              : 'No tiene evaluaciones; solo se quita la competencia.'}
+          </p>
+        </label>
+
+        {mode === 'merge' ? (
+          <p className="text-xs text-gray-500 mt-3">
+            Después de fusionar, las {others.length} competencia{others.length === 1 ? '' : 's'} restante{others.length === 1 ? '' : 's'} quedan en partes iguales ({Math.round(100 / others.length)}% c/u). Puedes ajustarlo con el % del encabezado.
+          </p>
+        ) : pc.manual_weight !== null && pc.manual_weight !== undefined && (
+          <p className="text-xs text-orange-600 mt-3">Esta competencia tenía peso manual; los porcentajes de las demás se recalcularán.</p>
+        )}
+
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="text-sm px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100">Cancelar</button>
+          <button
+            onClick={submit}
+            disabled={working || (mode === 'merge' && !target)}
+            className={`text-sm px-4 py-2 rounded-lg text-white disabled:opacity-50 ${mode === 'merge' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-red-600 hover:bg-red-700'}`}
+          >
+            {working ? '…' : mode === 'merge' ? `Fusionar en ${target ? COMPETENCIES[target.competency_key as CompetencyKey].short : ''}` : 'Eliminar'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }
 

@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS period_competencies (
   UNIQUE(period_id, competency_key)
 );
 
+-- Competencias fusionadas dentro de esta: [{ "competency_key": "CC", "learning_objective": "..." }]
+ALTER TABLE period_competencies ADD COLUMN IF NOT EXISTS merged_from JSONB NOT NULL DEFAULT '[]'::jsonb;
+
 -- Grade columns (columnas de nota)
 CREATE TABLE IF NOT EXISTS grade_columns (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

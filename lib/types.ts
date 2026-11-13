@@ -52,6 +52,8 @@ export interface PeriodCompetency {
   learning_objective: string
   contents?: string
   manual_weight?: number | null
+  // Competencias fusionadas dentro de esta (se muestran juntas en el encabezado)
+  merged_from?: { competency_key: 'CTP' | 'CC' | 'CTT'; learning_objective?: string | null }[] | null
   sort_order: number
   created_at: string
 }
