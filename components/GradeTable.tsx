@@ -10,6 +10,7 @@ import {
   computePeriodFinalFromCompetencies,
   computeCompetencyGradesWithBonus,
   getBonusPlacement,
+  getScoreWithBonus,
   type BonusPlacement,
   getStudentScore,
   getColorForGrade,
@@ -67,6 +68,8 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [claudeThreshold, setClaudeThreshold] = useState(6.5)
   const [claudeScope, setClaudeScope] = useState<'global' | string>('global')
   const [showArchived, setShowArchived] = useState(false)
+  const [phidiasToast, setPhidiasToast] = useState<string | null>(null)
+  const [phidiasFallback, setPhidiasFallback] = useState<{ title: string; text: string; note: string } | null>(null)
 
   const [weights, setWeights] = useState(period.grade_weights ?? course.grade_weights ?? { formativa: 40, sumativa: 60 })
   const [bonusCap, setBonusCap] = useState(period.bonus_cap ?? course.bonus_cap ?? 1)
@@ -417,6 +420,34 @@ export default function GradeTable({ course, period, students, initialGroups, on
       .catch(() => alert('No se pudo copiar al portapapeles. Inténtalo de nuevo.'))
   }
 
+  // Copia las notas de UNA actividad para pegarlas en la extensión de Phidias:
+  // "Nombre\tNota" por línea, sin encabezado; se omiten los estudiantes sin nota.
+  function copyForPhidias(col: GradeColumn) {
+    const lines: string[] = []
+    let skipped = 0
+    for (const s of localStudents) {
+      const placement = getBonusPlacement(s.id, columns, grades, criterionGrades, bonusCap)
+      const score = getScoreWithBonus(s.id, col, grades, criterionGrades, placement)
+      if (score === null || !Number.isFinite(score)) {
+        skipped++
+        continue
+      }
+      lines.push(`${s.name.trim()}\t${String(Math.round(score * 100) / 100)}`)
+    }
+    const text = lines.join('\n')
+    const note = `Copiado: ${lines.length} estudiante${lines.length === 1 ? '' : 's'} de ${col.name}` +
+      (skipped > 0 ? ` · ${skipped} sin nota no se copiaron` : '')
+
+    const fallback = () => setPhidiasFallback({ title: col.name, text, note: note.replace(/^Copiado: /, '') })
+    if (!navigator.clipboard?.writeText) return fallback()
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        setPhidiasToast(note)
+        setTimeout(() => setPhidiasToast((t) => (t === note ? null : t)), 3500)
+      })
+      .catch(fallback)
+  }
+
   function exportColumn(col: GradeColumn) {
     const header = ['Estudiante', col.name]
     const rows = localStudents.map((student) => {
@@ -463,6 +494,33 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
+      {phidiasToast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-4 py-2 rounded-xl shadow-lg">
+          ✓ {phidiasToast}
+        </div>
+      )}
+      {phidiasFallback && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setPhidiasFallback(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-5" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-base font-bold text-gray-900 mb-1">Copiar para Phidias – {phidiasFallback.title}</h2>
+            <p className="text-sm text-gray-600 mb-2">
+              No se pudo copiar automáticamente. Selecciona el texto y cópialo a mano (Cmd+C). {phidiasFallback.note}.
+            </p>
+            <textarea
+              readOnly
+              autoFocus
+              value={phidiasFallback.text}
+              onFocus={(e) => e.currentTarget.select()}
+              className="w-full h-64 border rounded-lg p-2 text-xs font-mono"
+            />
+            <div className="mt-3 text-right">
+              <button onClick={() => setPhidiasFallback(null)} className="px-4 py-2 border border-gray-300 rounded-xl text-sm hover:bg-gray-50">
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Controls bar */}
       <div className="flex items-center gap-2 py-2 flex-wrap bg-gray-50 border-b border-gray-200 px-1">
         <input
@@ -697,6 +755,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
                             onQuickGrade={() => openQuickGrade(col)}
                             onGroupGrade={() => groups.length > 0 && setGroupGradeCol(col)}
                             onExport={() => exportColumn(col)}
+                            onCopyPhidias={() => copyForPhidias(col)}
                           />
                         )
                       })
@@ -1209,6 +1268,7 @@ function ColumnHeader({
   onQuickGrade,
   onGroupGrade,
   onExport,
+  onCopyPhidias,
 }: {
   col: GradeColumn
   criteria: Criterion[]
@@ -1218,6 +1278,7 @@ function ColumnHeader({
   onQuickGrade: () => void
   onGroupGrade: () => void
   onExport: () => void
+  onCopyPhidias?: () => void
 }) {
   const [copied, setCopied] = useState(false)
   const typeColor = col.type === 'formativa' ? 'text-green-700 bg-green-50' :
@@ -1275,6 +1336,9 @@ function ColumnHeader({
           >
             {copied ? '✓' : '{}'}
           </button>
+        )}
+        {onCopyPhidias && (
+          <button onClick={onCopyPhidias} className="text-gray-400 hover:text-orange-600 text-xs font-bold" title="Copiar para Phidias">P</button>
         )}
         <button onClick={onExport} className="text-gray-400 hover:text-green-600 text-xs" title="Exportar notas a Excel">↓</button>
         <button onClick={onEdit} className="text-gray-400 hover:text-blue-600 text-xs" title="Editar">✎</button>
