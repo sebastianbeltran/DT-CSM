@@ -73,6 +73,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
   const [semaforoOn, setSemaforoOn] = useState(false)
   const [alertsOn, setAlertsOn] = useState(true)
   const [alertThreshold, setAlertThreshold] = useState(6.5)
+  const [fillingPending, setFillingPending] = useState(false)
   const [prefsLoaded, setPrefsLoaded] = useState(false)
   const [phidiasFallback, setPhidiasFallback] = useState<{ title: string; text: string; note: string } | null>(null)
 
@@ -389,6 +390,38 @@ export default function GradeTable({ course, period, students, initialGroups, on
   }
 
   const atRisk = sortedStudents.filter((s) => lowActivities(s).length > 0)
+
+  // Pendientes que se pueden llenar con 1: evaluaciones de competencia sin nota
+  // (las entregas Sí/No se dejan aparte). Recorre todo el curso, no solo la búsqueda.
+  const pendingToFill = localStudents.flatMap((s) =>
+    owedActivities(s.id)
+      .filter((c) => c.type !== 'entrega')
+      .map((c) => ({ studentId: s.id, studentName: s.name, column: c }))
+  )
+
+  async function fillPendingWithOne() {
+    if (pendingToFill.length === 0) return
+    const byStudent = new Map<string, string[]>()
+    for (const p of pendingToFill) {
+      byStudent.set(p.studentName, [...(byStudent.get(p.studentName) ?? []), p.column.name])
+    }
+    const detail = Array.from(byStudent.entries())
+      .map(([name, acts]) => `• ${name}: ${acts.join(', ')}`)
+      .join('\n')
+    const ok = window.confirm(
+      `Se pondrá 1.0 en ${pendingToFill.length} actividad(es) pendiente(s):\n\n${detail}\n\n` +
+      `Las entregas Sí/No no se tocan. ¿Continuar?`
+    )
+    if (!ok) return
+    setFillingPending(true)
+    try {
+      for (const p of pendingToFill) {
+        await saveGrade(p.studentId, p.column.id, 1)
+      }
+    } finally {
+      setFillingPending(false)
+    }
+  }
   const owingCount = sortedStudents.filter((s) => owedActivities(s.id).length > 0).length
 
   // Copia las notas de UNA actividad para pegarlas en la extensión de Phidias:
@@ -567,6 +600,16 @@ export default function GradeTable({ course, period, students, initialGroups, on
           <span className="text-sm px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-red-700">
             {owingCount} deben actividades
           </span>
+        )}
+        {pendingToFill.length > 0 && (
+          <button
+            onClick={fillPendingWithOne}
+            disabled={fillingPending}
+            className="text-sm px-3 py-1.5 border border-red-300 bg-white text-red-700 rounded-lg hover:bg-red-50 disabled:opacity-50"
+            title="Pone 1.0 en todas las evaluaciones pendientes del curso (pide confirmación). No toca las entregas Sí/No."
+          >
+            {fillingPending ? 'Poniendo 1...' : `Poner 1 a pendientes (${pendingToFill.length})`}
+          </button>
         )}
 
         <div className="ml-auto flex items-center gap-2">
