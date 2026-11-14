@@ -376,7 +376,19 @@ export default function GradeTable({ course, period, students, initialGroups, on
     })
   }
 
-  const atRisk = sortedStudents.filter((s) => s.finalGrade !== null && s.finalGrade < alertThreshold)
+  // Actividades de competencia (no bono, no entregas) con nota por debajo del límite.
+  // Se usa la nota que se ve en la celda (con el bono, si cae en esa actividad).
+  const scoredColumns = columns.filter((c) => c.competency_key && c.type !== 'bonus' && c.type !== 'entrega')
+  function lowActivities(student: (typeof studentsWithGrades)[number]): GradeColumn[] {
+    return scoredColumns.filter((c) => {
+      const score = getStudentScore(student.id, c, grades, criterionGrades)
+      if (score === null) return false
+      const bonus = student.bonusPlacement?.columnId === c.id ? student.bonusPlacement.points : 0
+      return Math.min(10, score + bonus) < alertThreshold
+    })
+  }
+
+  const atRisk = sortedStudents.filter((s) => lowActivities(s).length > 0)
   const owingCount = sortedStudents.filter((s) => owedActivities(s.id).length > 0).length
 
   // Copia las notas de UNA actividad para pegarlas en la extensión de Phidias:
@@ -511,7 +523,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
         </div>
 
         <div className="flex items-center border border-gray-300 bg-white rounded-lg overflow-hidden text-sm">
-          <label className="flex items-center gap-1.5 px-3 py-1.5 cursor-pointer select-none" title="Resalta el nombre de quien debe actividades o tiene nota final por debajo del límite">
+          <label className="flex items-center gap-1.5 px-3 py-1.5 cursor-pointer select-none" title="Resalta en rojo el nombre y la casilla de quien debe actividades o tiene alguna nota por debajo del límite">
             <input type="checkbox" checked={alertsOn} onChange={(e) => setAlertsOn(e.target.checked)} />
             Alertas
           </label>
@@ -528,7 +540,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
             }}
             disabled={!alertsOn}
             className="w-12 text-center py-1.5 focus:outline-none disabled:text-gray-300"
-            title="Nota final por debajo de la cual se marca al estudiante"
+            title="Nota de actividad por debajo de la cual se marca al estudiante"
           />
         </div>
 
@@ -548,7 +560,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
 
         {alertsOn && atRisk.length > 0 && (
           <span className="text-sm px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-red-700">
-            {atRisk.length} bajo {alertThreshold}
+            {atRisk.length} con notas bajo {alertThreshold}
           </span>
         )}
         {alertsOn && owingCount > 0 && (
@@ -795,11 +807,11 @@ export default function GradeTable({ course, period, students, initialGroups, on
               const bg = semaforoOn ? getColorForGrade(student.finalGrade, colorRanges) : 'transparent'
               const isRisk = student.finalGrade !== null && student.finalGrade < alertThreshold
               const owed = alertsOn ? owedActivities(student.id) : []
-              const owedIds = new Set(owed.map((c) => c.id))
-              const isLow = alertsOn && isRisk
-              const nameCellClass = isLow || owed.length > 0 ? '!bg-red-300 text-red-950' : 'bg-white'
+              const low = alertsOn ? lowActivities(student) : []
+              const owedIds = new Set([...owed, ...low].map((c) => c.id))
+              const nameCellClass = low.length > 0 || owed.length > 0 ? '!bg-red-300 text-red-950' : 'bg-white'
               const alertTitle = [
-                isLow ? `Nota final ${student.finalGrade!.toFixed(1)} (menor a ${alertThreshold})` : '',
+                low.length > 0 ? `${low.length} nota${low.length === 1 ? '' : 's'} menor${low.length === 1 ? '' : 'es'} a ${alertThreshold}: ${low.map((c) => c.name).join(', ')}` : '',
                 owed.length > 0 ? `Debe ${owed.length} actividad${owed.length === 1 ? '' : 'es'}: ${owed.map((c) => c.name).join(', ')}` : '',
               ].filter(Boolean).join('\n')
               return (
@@ -814,6 +826,11 @@ export default function GradeTable({ course, period, students, initialGroups, on
                   >
                     <div className="flex items-center gap-1 group">
                       <span className="flex-1">{student.name}</span>
+                      {low.length > 0 && (
+                        <span className="text-[10px] font-semibold px-1.5 rounded-full bg-red-600 text-white">
+                          {low.length} &lt;{alertThreshold}
+                        </span>
+                      )}
                       {owed.length > 0 && (
                         <span className="text-[10px] font-semibold px-1.5 rounded-full bg-red-600 text-white">
                           debe {owed.length}
@@ -1507,7 +1524,7 @@ function GradeCell({
   if (col.type === 'sumativa' || hasCriteria) {
     return (
       <td
-        className={`px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50 ${isZero ? 'bg-red-50' : owed ? 'bg-red-300' : ''}`}
+        className={`px-1 py-0.5 text-center border-r border-gray-200 cursor-pointer hover:bg-green-50 ${owed ? 'bg-red-300' : isZero ? 'bg-red-50' : ''}`}
         onClick={onOpenQuickGrade}
         title={hasCriteria ? 'Click para calificar por rúbrica' : 'Definir criterios primero'}
       >
@@ -1571,7 +1588,7 @@ function GradeCell({
   }
 
   return (
-    <td className={`px-1 py-0.5 text-center border-r border-gray-200 ${saving ? 'bg-blue-50' : isZero ? 'bg-red-50' : owed ? 'bg-red-300' : ''}`}>
+    <td className={`px-1 py-0.5 text-center border-r border-gray-200 ${saving ? 'bg-blue-50' : owed ? 'bg-red-300' : isZero ? 'bg-red-50' : ''}`}>
       {disabled ? (
         <span className="text-gray-300 text-xs" title="Escribe la descripción de la columna primero">—</span>
       ) : (
