@@ -797,7 +797,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
               const owed = alertsOn ? owedActivities(student.id) : []
               const owedIds = new Set(owed.map((c) => c.id))
               const isLow = alertsOn && isRisk
-              const nameCellClass = isLow || owed.length > 0 ? 'bg-red-300 text-red-950' : 'bg-white'
+              const nameCellClass = isLow || owed.length > 0 ? '!bg-red-300 text-red-950' : 'bg-white'
               const alertTitle = [
                 isLow ? `Nota final ${student.finalGrade!.toFixed(1)} (menor a ${alertThreshold})` : '',
                 owed.length > 0 ? `Debe ${owed.length} actividad${owed.length === 1 ? '' : 'es'}: ${owed.map((c) => c.name).join(', ')}` : '',
