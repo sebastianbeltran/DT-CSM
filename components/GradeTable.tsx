@@ -438,11 +438,42 @@ export default function GradeTable({ course, period, students, initialGroups, on
       }
       lines.push(`${s.name.trim()}\t${String(Math.round(score * 100) / 100)}`)
     }
-    const text = lines.join('\n')
     const note = `Copiado: ${lines.length} estudiante${lines.length === 1 ? '' : 's'} de ${col.name}` +
       (skipped > 0 ? ` · ${skipped} sin nota no se copiaron` : '')
+    copyTextForPhidias(col.name, lines.join('\n'), note)
+  }
 
-    const fallback = () => setPhidiasFallback({ title: col.name, text, note: note.replace(/^Copiado: /, '') })
+  // Copia los informes del periodo para la extensión de Phidias:
+  // "Nombre\tInforme" por línea, sin encabezado; los saltos de línea y tabs del
+  // informe se vuelven un espacio; se omiten los estudiantes sin informe.
+  async function copyReportsForPhidias() {
+    let reports: { student_id: string; content: string | null }[]
+    try {
+      const res = await fetch(`/api/reports?periodId=${period.id}`)
+      if (!res.ok) throw new Error()
+      reports = await res.json()
+    } catch {
+      alert('No se pudieron cargar los informes. Verifica tu conexión e intenta de nuevo.')
+      return
+    }
+    const lines: string[] = []
+    let skipped = 0
+    for (const s of localStudents) {
+      const content = reports.find((r) => r.student_id === s.id)?.content ?? ''
+      const flat = content.replace(/\s+/g, ' ').trim()
+      if (!flat) {
+        skipped++
+        continue
+      }
+      lines.push(`${s.name.trim()}\t${flat}`)
+    }
+    const note = `Copiado: ${lines.length} informe${lines.length === 1 ? '' : 's'}` +
+      (skipped > 0 ? ` · ${skipped} sin informe no se copiaron` : '')
+    copyTextForPhidias('Informes', lines.join('\n'), note)
+  }
+
+  function copyTextForPhidias(title: string, text: string, note: string) {
+    const fallback = () => setPhidiasFallback({ title, text, note: note.replace(/^Copiado: /, '') })
     if (!navigator.clipboard?.writeText) return fallback()
     navigator.clipboard.writeText(text)
       .then(() => {
@@ -758,7 +789,16 @@ export default function GradeTable({ course, period, students, initialGroups, on
                 Final
               </th>
               <th className="px-2 py-2 text-xs font-semibold text-gray-500 bg-gray-50 text-center min-w-20">
-                Informe
+                <span className="inline-flex items-center gap-1.5">
+                  Informe
+                  <button
+                    onClick={copyReportsForPhidias}
+                    className="text-gray-400 hover:text-orange-600 text-xs font-bold"
+                    title="Copiar informes para Phidias"
+                  >
+                    P
+                  </button>
+                </span>
               </th>
             </tr>
 
