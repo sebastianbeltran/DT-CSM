@@ -12,6 +12,7 @@ interface Template {
 interface Props {
   students: Student[]
   period: Period
+  finalGrades?: Record<string, number | null>
   onClose: () => void
 }
 
@@ -51,7 +52,7 @@ function firstName(fullName: string): string {
     .join(' ')
 }
 
-export default function ReportTemplateModal({ students, period, onClose }: Props) {
+export default function ReportTemplateModal({ students, period, finalGrades, onClose }: Props) {
   const [templates, setTemplates] = useState<Template[]>(loadSaved)
   const [generating, setGenerating] = useState(false)
   const [result, setResult] = useState<{ done: number; errors: number } | null>(null)
@@ -234,6 +235,9 @@ export default function ReportTemplateModal({ students, period, onClose }: Props
                           />
                           <span className={inOther ? 'line-through text-gray-400' : 'text-gray-700 truncate'}>
                             {s.name}
+                          </span>
+                          <span className="ml-auto pl-1 flex-shrink-0 font-semibold text-gray-500 tabular-nums">
+                            {finalGrades?.[s.id] != null ? finalGrades[s.id]!.toFixed(1) : '—'}
                           </span>
                         </label>
                       )

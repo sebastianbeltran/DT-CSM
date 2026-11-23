@@ -1156,6 +1156,7 @@ export default function GradeTable({ course, period, students, initialGroups, on
         <ReportTemplateModal
           students={localStudents}
           period={period}
+          finalGrades={Object.fromEntries(localStudents.map((s) => [s.id, computePeriodFinalFromCompetencies(s.id, periodCompetencies, columns, grades, criterionGrades, weights, bonusCap)]))}
           onClose={() => setShowReportTemplate(false)}
         />
       )}
